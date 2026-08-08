@@ -45,8 +45,10 @@ def test_scanner_aggregates_every_collector_result_channel(tmp_path: Path) -> No
 def test_default_registry_runs_repository_metadata_collector(tmp_path: Path) -> None:
     result = Scanner.default().scan(tmp_path)
 
-    assert result.collectors == ["repository_metadata"]
+    assert result.collectors == ["repository_metadata", "spring_api"]
     assert any(fact.id == "fact.repository.root" for fact in result.facts)
+    assert not any(fact.id.startswith("fact.spring.endpoint.") for fact in result.facts)
+    assert result.errors == []
 
 
 def test_scanner_adds_scan_metadata_with_utc_timestamps(tmp_path: Path) -> None:

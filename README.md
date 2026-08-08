@@ -41,7 +41,8 @@ python -m repoevidence scan /path/to/repository
 - `CollectorResult` 独立承载 `evidence`、`facts`、`conflicts`、`warnings`、`errors`，由 Scanner 聚合为 JSON。
 - 输出 schema 版本为 `0.1`，包含工具版本和 timezone-aware UTC 扫描时间。
 - Evidence ID 使用稳定的 `ev.` 前缀，Fact ID 使用稳定的 `fact.` 前缀；Fact 和 Conflict 的引用会在聚合时校验。
+- 默认注册 `spring_api` Collector，使用 Tree-sitter Java AST 从 `**/src/main/java/**/*.java` 中提取 `@RestController` 的静态 HTTP endpoint。
 
 ## 当前明确不包含
 
-M0 不包含 LLM、RAG、文档生成功能、Spring API 扫描、MySQL、Flyway 或 Web UI。
+当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、MySQL、Flyway 或 Web UI。

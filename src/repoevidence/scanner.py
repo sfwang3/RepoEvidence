@@ -3,6 +3,7 @@ from pathlib import Path
 
 from repoevidence import __version__
 from repoevidence.collectors.repository_metadata import RepositoryMetadataCollector
+from repoevidence.collectors.spring_api import SpringApiCollector
 from repoevidence.models import (
     ScanMetadata,
     ScanResult,
@@ -18,6 +19,7 @@ class Scanner:
     def default(cls) -> "Scanner":
         registry = CollectorRegistry()
         registry.register(RepositoryMetadataCollector())
+        registry.register(SpringApiCollector())
         return cls(registry)
 
     def scan(self, repo_path: str | Path) -> ScanResult:
