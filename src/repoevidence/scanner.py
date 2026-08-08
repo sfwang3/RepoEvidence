@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from repoevidence import __version__
+from repoevidence.collectors.flyway_migration import FlywayMigrationCollector
 from repoevidence.collectors.maven_project import MavenProjectCollector
 from repoevidence.collectors.repository_metadata import RepositoryMetadataCollector
 from repoevidence.collectors.spring_api import SpringApiCollector
@@ -22,6 +23,7 @@ class Scanner:
         registry.register(RepositoryMetadataCollector())
         registry.register(SpringApiCollector())
         registry.register(MavenProjectCollector())
+        registry.register(FlywayMigrationCollector())
         return cls(registry)
 
     def scan(self, repo_path: str | Path) -> ScanResult:

@@ -44,7 +44,9 @@ python -m repoevidence scan /path/to/repository
 - 默认注册 `spring_api` Collector，使用 Tree-sitter Java AST 从 `**/src/main/java/**/*.java` 中提取 `@RestController` 的静态 HTTP endpoint。
 - 默认注册 `maven_project` Collector，从非 `target/` 下的 `pom.xml` 静态提取 Maven project、module、parent、property、dependency、dependencyManagement、plugin 和明确的 Java/Spring Boot baseline 声明。
 - Maven collector 使用 `defusedxml`，不执行 Maven、不解析 Effective POM、不下载依赖，也不进行 dependency resolution。
+- 默认注册 `flyway_migration` Collector，从标准 `src/main/resources/db/migration` 目录静态提取 SQL migration 文件、版本顺序、repeatable 文件和同 migration set 内的重复版本冲突。
+- Flyway collector 只记录文件声明与 SHA-256，不执行 SQL、不连接数据库、不调用 Flyway，也不解析 SQL schema 语义。
 
 ## 当前明确不包含
 
-当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、MySQL、Flyway 或 Web UI。
+当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、MySQL 或 Web UI。
