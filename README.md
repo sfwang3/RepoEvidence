@@ -32,6 +32,26 @@ repoevidence scan /path/to/repository
 python -m repoevidence scan /path/to/repository
 ```
 
+显式执行 MySQL 只读运行时验证：
+
+```bash
+repoevidence verify mysql /path/to/repository
+```
+
+连接信息只从以下 RepoEvidence 环境变量读取：
+
+```text
+REPOEVIDENCE_MYSQL_HOST
+REPOEVIDENCE_MYSQL_PORT
+REPOEVIDENCE_MYSQL_USER
+REPOEVIDENCE_MYSQL_PASSWORD
+REPOEVIDENCE_MYSQL_DATABASE
+```
+
+运行时结果单独写入 `.repoevidence/verification/mysql.json`。`scan` 不读取这些变量，
+也不会连接数据库。MySQL 验证只执行固定的 metadata、schema 和 Flyway history
+只读查询，建议使用只有 `SELECT` 权限的数据库用户。
+
 ## 当前能力
 
 - 提供可安装的 `repoevidence scan <repo-path>` CLI。
@@ -46,7 +66,8 @@ python -m repoevidence scan /path/to/repository
 - Maven collector 使用 `defusedxml`，不执行 Maven、不解析 Effective POM、不下载依赖，也不进行 dependency resolution。
 - 默认注册 `flyway_migration` Collector，从标准 `src/main/resources/db/migration` 目录静态提取 SQL migration 文件、版本顺序、repeatable 文件和同 migration set 内的重复版本冲突。
 - Flyway collector 只记录文件声明与 SHA-256，不执行 SQL、不连接数据库、不调用 Flyway，也不解析 SQL schema 语义。
+- `verify mysql` 只在显式调用时采集当前数据库的 schema metadata 和 `flyway_schema_history`；数据库中的 Flyway `checksum` 与源码文件 SHA-256 是不同概念。
 
 ## 当前明确不包含
 
-当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、MySQL 或 Web UI。
+当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、数据库写操作、Maven execution 或 Web UI。

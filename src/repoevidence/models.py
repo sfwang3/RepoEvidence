@@ -122,3 +122,79 @@ class ScanResult(BaseModel):
                     f"Conflict {conflict.id} references unknown evidence ID: {sorted(missing)}"
                 )
         return self
+
+
+class VerificationError(BaseModel):
+    """A safe, structured error emitted by an explicit verifier."""
+
+    code: str
+    message: str
+
+
+class VerificationMetadata(BaseModel):
+    """Small, timezone-safe metadata describing one runtime verification."""
+
+    tool_version: str
+    started_at: datetime
+    finished_at: datetime
+    observed_at: datetime | None = None
+
+    @field_validator("started_at", "finished_at", "observed_at")
+    @classmethod
+    def require_utc_datetime(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() != timedelta(0):
+            raise ValueError("Verification timestamps must be timezone-aware UTC datetimes")
+        return value.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def require_finished_after_start(self) -> "VerificationMetadata":
+        if self.finished_at < self.started_at:
+            raise ValueError("finished_at must be after started_at")
+        return self
+
+
+class VerificationResult(BaseModel):
+    """The isolated result of one explicit runtime verification."""
+
+    schema_version: Literal["0.1"] = "0.1"
+    verifier: str
+    repository_root: str
+    metadata: VerificationMetadata
+    evidence: list[Evidence] = Field(default_factory=list)
+    facts: list[Fact] = Field(default_factory=list)
+    conflicts: list[Conflict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[VerificationError] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> "VerificationResult":
+        evidence_ids = [item.id for item in self.evidence]
+        if len(evidence_ids) != len(set(evidence_ids)):
+            raise ValueError("Duplicate evidence ID")
+
+        fact_ids = [item.id for item in self.facts]
+        if len(fact_ids) != len(set(fact_ids)):
+            raise ValueError("Duplicate fact ID")
+
+        evidence_id_set = set(evidence_ids)
+        fact_id_set = set(fact_ids)
+        for fact in self.facts:
+            missing = set(fact.evidence_ids) - evidence_id_set
+            if missing:
+                raise ValueError(
+                    f"Fact {fact.id} references unknown evidence ID: {sorted(missing)}"
+                )
+
+        for conflict in self.conflicts:
+            if conflict.fact_id is not None and conflict.fact_id not in fact_id_set:
+                raise ValueError(
+                    f"Conflict {conflict.id} references unknown fact ID: {conflict.fact_id}"
+                )
+            missing = set(conflict.evidence_ids) - evidence_id_set
+            if missing:
+                raise ValueError(
+                    f"Conflict {conflict.id} references unknown evidence ID: {sorted(missing)}"
+                )
+        return self

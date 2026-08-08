@@ -10,6 +10,9 @@ from repoevidence.models import (
     Fact,
     ScanMetadata,
     ScanResult,
+    VerificationError,
+    VerificationMetadata,
+    VerificationResult,
 )
 
 
@@ -126,3 +129,28 @@ def test_scan_result_rejects_duplicate_and_dangling_references() -> None:
                 )
             ],
         )
+
+
+def test_verification_result_has_safe_structured_errors_and_reference_integrity() -> None:
+    started_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    finished_at = datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+    result = VerificationResult(
+        verifier="mysql",
+        repository_root="/repo",
+        metadata=VerificationMetadata(
+            tool_version="0.1.0",
+            started_at=started_at,
+            finished_at=finished_at,
+            observed_at=finished_at,
+        ),
+        errors=[
+            VerificationError(
+                code="mysql_connection_failed",
+                message="Unable to connect to MySQL.",
+            )
+        ],
+    )
+
+    assert result.schema_version == "0.1"
+    assert result.errors[0].code == "mysql_connection_failed"
+    assert "password" not in result.model_dump_json().lower()
