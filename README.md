@@ -32,7 +32,7 @@ repoevidence scan /path/to/repository
 python -m repoevidence scan /path/to/repository
 ```
 
-## 当前 M0 能力
+## 当前能力
 
 - 提供可安装的 `repoevidence scan <repo-path>` CLI。
 - 通过 `Collector` 抽象接口和显式 registry 支持扩展 Collector。
@@ -42,6 +42,8 @@ python -m repoevidence scan /path/to/repository
 - 输出 schema 版本为 `0.1`，包含工具版本和 timezone-aware UTC 扫描时间。
 - Evidence ID 使用稳定的 `ev.` 前缀，Fact ID 使用稳定的 `fact.` 前缀；Fact 和 Conflict 的引用会在聚合时校验。
 - 默认注册 `spring_api` Collector，使用 Tree-sitter Java AST 从 `**/src/main/java/**/*.java` 中提取 `@RestController` 的静态 HTTP endpoint。
+- 默认注册 `maven_project` Collector，从非 `target/` 下的 `pom.xml` 静态提取 Maven project、module、parent、property、dependency、dependencyManagement、plugin 和明确的 Java/Spring Boot baseline 声明。
+- Maven collector 使用 `defusedxml`，不执行 Maven、不解析 Effective POM、不下载依赖，也不进行 dependency resolution。
 
 ## 当前明确不包含
 

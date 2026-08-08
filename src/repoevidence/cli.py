@@ -26,7 +26,7 @@ def scan(
         metavar="REPO_PATH",
     ),
 ) -> None:
-    """Collect M0 repository metadata from REPO_PATH."""
+    """Collect deterministic repository evidence from REPO_PATH."""
     root = repo_path.expanduser().resolve()
     result = Scanner.default().scan(root)
     output_path = root / ".repoevidence" / "evidence.json"
