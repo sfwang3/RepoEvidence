@@ -343,7 +343,7 @@ def test_connection_exception_is_redacted_from_result_and_cli_output(tmp_path: P
         result = CliRunner().invoke(app, ["verify", "mysql", str(tmp_path)])
     finally:
         mysql.default_connection_factory = original
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert secret not in result.output
     payload = json.loads(
         (tmp_path / ".repoevidence" / "verification" / "mysql.json").read_text(encoding="utf-8")
@@ -358,7 +358,7 @@ def test_mysql_verification_writes_separate_output_and_scan_never_connects(
         monkeypatch.delenv(key, raising=False)
     connection = FakeConnection(rows_for_schema())
     result = CliRunner().invoke(app, ["verify", "mysql", str(tmp_path)])
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 1, result.output
     assert (tmp_path / ".repoevidence" / "verification" / "mysql.json").exists()
     assert not (tmp_path / ".repoevidence" / "evidence.json").exists()
 

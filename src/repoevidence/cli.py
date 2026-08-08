@@ -41,7 +41,9 @@ def scan(
     if result.warnings:
         typer.echo(f"Warnings: {len(result.warnings)}")
     if result.errors:
-        typer.echo(f"Errors: {len(result.errors)}")
+        for error in result.errors:
+            typer.echo(f"Error [{error.code}]: {error.message}", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command("reconcile")
@@ -64,7 +66,9 @@ def reconcile(
     if result.warnings:
         typer.echo(f"Warnings: {len(result.warnings)}")
     if result.errors:
-        typer.echo(f"Errors: {len(result.errors)}")
+        for error in result.errors:
+            typer.echo(f"Error [{error.code}]: {error.message}", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command("report")
@@ -107,7 +111,9 @@ def verify_mysql(
     if result.warnings:
         typer.echo(f"Warnings: {len(result.warnings)}")
     if result.errors:
-        typer.echo(f"Errors: {len(result.errors)}")
+        for error in result.errors:
+            typer.echo(f"Error [{error.code}]: {error.message}", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

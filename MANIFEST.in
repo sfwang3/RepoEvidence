@@ -1,0 +1,12 @@
+include README.md
+prune .github
+prune .repoevidence
+prune .venv
+prune build
+prune dist
+prune docs
+prune tests
+global-exclude .env
+global-exclude .env.*
+global-exclude *.py[cod]
+global-exclude __pycache__

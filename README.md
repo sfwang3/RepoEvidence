@@ -1,44 +1,54 @@
 # RepoEvidence
 
-RepoEvidence 是一个不依赖 LLM 的 Software Evidence Engine M0 工程骨架，最小闭环为：
+RepoEvidence is a deterministic, LLM-free engine for understanding software repositories with evidence you can inspect and verify.
 
-`Repo → Collector → Evidence/Fact → JSON`
+It separates what a repository declares from what runtime verification observes:
 
-## 安装
-
-```bash
-python -m pip install -e '.[dev]'
+```text
+repository → collectors → Evidence / Fact → JSON
+                                      ↘ Verification / Reconciliation
 ```
 
-要求 Python 3.12 或更高版本。
+Evidence preserves the original observation. A Fact is a structured interpretation with an explicit status: `declared`, `inferred`, `verified`, or `conflicted`. Runtime verification is opt-in, and reconciliation reports cross-artifact drift without pretending that static source evidence and runtime observations are the same thing.
 
-## CLI 示例
+## Quick start
 
-扫描当前目录下的仓库：
+Requires Python 3.12 or newer.
+
+```bash
+python -m pip install repoevidence
+
+repoevidence scan /path/to/repository
+repoevidence report /path/to/repository
+```
+
+The scan writes `.repoevidence/evidence.json`. The report writes a self-contained HTML file to `.repoevidence/report/index.html`; open it directly in a browser. Report generation does not start a server, install frontend dependencies, access the network, or execute the target repository.
+
+## CLI
+
+### Static scan
 
 ```bash
 repoevidence scan /path/to/repository
 ```
 
-结果默认写入被扫描仓库内部的：
+The default static collectors inspect repository metadata, Spring MVC annotations, Maven declarations, and Flyway migration files. The scan does not run Maven, Flyway, SQL, tests, or target-repository code.
 
-```text
-/path/to/repository/.repoevidence/evidence.json
-```
-
-也可以从源码运行：
+### Offline HTML report
 
 ```bash
-python -m repoevidence scan /path/to/repository
+repoevidence report /path/to/repository
 ```
 
-显式执行 MySQL 只读运行时验证：
+The report reads the existing static scan and, when present, MySQL verification and reconciliation artifacts. Missing optional artifacts are shown as `Not available`; the command never runs those upstream operations automatically.
+
+### Explicit MySQL verification
 
 ```bash
 repoevidence verify mysql /path/to/repository
 ```
 
-连接信息只从以下 RepoEvidence 环境变量读取：
+This is the only command that connects to MySQL. Connection settings are read from environment variables, never from CLI arguments:
 
 ```text
 REPOEVIDENCE_MYSQL_HOST
@@ -48,49 +58,65 @@ REPOEVIDENCE_MYSQL_PASSWORD
 REPOEVIDENCE_MYSQL_DATABASE
 ```
 
-运行时结果单独写入 `.repoevidence/verification/mysql.json`。`scan` 不读取这些变量，
-也不会连接数据库。MySQL 验证只执行固定的 metadata、schema 和 Flyway history
-只读查询，建议使用只有 `SELECT` 权限的数据库用户。
+The verifier runs fixed read-only metadata queries and writes `.repoevidence/verification/mysql.json`. Use a dedicated database account with only the `SELECT` permissions required by those metadata queries. No business table rows are collected.
 
-离线比较静态扫描与 MySQL Flyway history：
+### Offline Flyway reconciliation
 
 ```bash
 repoevidence reconcile /path/to/repository
 ```
 
-`reconcile` 只读取 `.repoevidence/evidence.json` 和
-`.repoevidence/verification/mysql.json`，不连接数据库、不执行目标仓库代码，
-结果写入 `.repoevidence/reconciliation.json`。M5 第一阶段只识别 Flyway
-`matched`、`runtime_only`、`source_only`、`version_mismatch`、`runtime_failed`
-和 `ambiguous`，并将 Flyway baseline 单独记录在 summary 中。
+Reconciliation reads `.repoevidence/evidence.json` and `.repoevidence/verification/mysql.json` only. It does not connect to MySQL or execute repository code. The result is `.repoevidence/reconciliation.json` and currently covers Flyway `matched`, `runtime_only`, `source_only`, `version_mismatch`, `runtime_failed`, `ambiguous`, and baseline handling.
 
-从已有 artifacts 生成完全离线的静态 HTML 报告：
+## ChargeSafe example
 
-```bash
-repoevidence report /path/to/repository
+ChargeSafe was used as a real acceptance case, but it is not required to use RepoEvidence and is not bundled with the package. The evidence showed a repository/runtime Flyway drift:
+
+```text
+Repository: V1–V6
+Runtime:    Baseline 0 + V1–V9
+Result:     runtime-only V7 / V8 / V9
 ```
 
-报告写入 `/path/to/repository/.repoevidence/report/index.html`，可直接用浏览器打开。
-`report` 只读取已有的 `evidence.json`、可选的 MySQL verification 和 reconciliation
-artifacts，不执行 scan、verify、reconcile、目标仓库代码、数据库连接或网络请求。
+The generated reconciliation kept the runtime references for V7, V8, and V9 and did not invent source references. No database credentials or connection configuration are part of this example.
 
-## 当前能力
+## Current coverage
 
-- 提供可安装的 `repoevidence scan <repo-path>` CLI。
-- 通过 `Collector` 抽象接口和显式 registry 支持扩展 Collector。
-- `RepositoryMetadataCollector` 采集仓库根目录、Git 仓库存在性、HEAD commit、当前分支，以及 `pom.xml`、`build.gradle`、`package.json`、`docker-compose.yml` 是否存在。
-- `Evidence` 保存原始、可追溯的观测；`Fact` 保存结构化事实，并通过 `evidence_ids` 指向依据。
-- `CollectorResult` 独立承载 `evidence`、`facts`、`conflicts`、`warnings`、`errors`，由 Scanner 聚合为 JSON。
-- 输出 schema 版本为 `0.1`，包含工具版本和 timezone-aware UTC 扫描时间。
-- Evidence ID 使用稳定的 `ev.` 前缀，Fact ID 使用稳定的 `fact.` 前缀；Fact 和 Conflict 的引用会在聚合时校验。
-- 默认注册 `spring_api` Collector，使用 Tree-sitter Java AST 从 `**/src/main/java/**/*.java` 中提取 `@RestController` 的静态 HTTP endpoint。
-- 默认注册 `maven_project` Collector，从非 `target/` 下的 `pom.xml` 静态提取 Maven project、module、parent、property、dependency、dependencyManagement、plugin 和明确的 Java/Spring Boot baseline 声明。
-- Maven collector 使用 `defusedxml`，不执行 Maven、不解析 Effective POM、不下载依赖，也不进行 dependency resolution。
-- 默认注册 `flyway_migration` Collector，从标准 `src/main/resources/db/migration` 目录静态提取 SQL migration 文件、版本顺序、repeatable 文件和同 migration set 内的重复版本冲突。
-- Flyway collector 只记录文件声明与 SHA-256，不执行 SQL、不连接数据库、不调用 Flyway，也不解析 SQL schema 语义。
-- `verify mysql` 只在显式调用时采集当前数据库的 schema metadata 和 `flyway_schema_history`；数据库中的 Flyway `checksum` 与源码文件 SHA-256 是不同概念。
-- `report` 展示 Evidence、Fact、静态 Spring/Maven/Flyway、MySQL runtime、reconciliation 和 artifact provenance；没有执行的可选 artifact 显示为 `Not available`，不会伪装成零值。
+- Repository metadata: Git commit/branch and common project files.
+- Spring API: statically inferred `@RestController` endpoints from Java source.
+- Maven: declared projects, modules, parent, properties, dependencies, dependency management, and plugins. No Effective POM or dependency resolution is claimed.
+- Flyway: declared versioned/repeatable migration files, ordering, and source file SHA-256. SQL is not executed.
+- MySQL: explicitly requested runtime metadata, schema summaries, indexes, constraints, and Flyway history.
+- Evidence-backed reconciliation: Flyway drift across static and runtime artifacts.
+- Offline HTML report: overview, status counts, domain sections, drift findings, fact/evidence drill-down, and artifact provenance.
 
-## 当前明确不包含
+## Security model
 
-当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、数据库写操作、Maven execution 或 Web UI。HTML report 是单文件离线输出，不需要 Node、前端构建或 Web server。
+RepoEvidence treats repositories, databases, and artifact contents as untrusted input.
+
+- Static scan, report, and reconciliation do not execute target code.
+- Report and reconciliation are offline operations.
+- MySQL verification is explicit opt-in and uses fixed read-only queries.
+- Passwords are not accepted as CLI arguments and secrets are not intended to enter artifacts or reports.
+- Report HTML escapes artifact-derived text and redacts secret-like structured fields.
+- Evidence and Fact references are stable and inspectable; uncertainty is not fabricated into a Fact.
+
+## Limitations
+
+RepoEvidence does not currently provide runtime Spring endpoint verification, DTO/entity analysis, Swagger/OpenAPI generation, SQL schema interpretation, Maven execution, dependency resolution, business-row inspection, automatic repair, risk scoring, LLM features, PDF/DOCX export, or a web service.
+
+## Development
+
+```bash
+python -m pip install -e '.[dev]'
+pytest
+ruff check .
+python -m build
+python -m twine check dist/*
+```
+
+The package declares Python `>=3.12`. CI runs the test suite, linter, distribution build, and distribution metadata checks without requiring a live database.
+
+## License status
+
+This repository currently does not include a `LICENSE` file. Choose and add the project's intended license before publishing to PyPI.
