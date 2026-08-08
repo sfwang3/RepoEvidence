@@ -52,6 +52,18 @@ REPOEVIDENCE_MYSQL_DATABASE
 也不会连接数据库。MySQL 验证只执行固定的 metadata、schema 和 Flyway history
 只读查询，建议使用只有 `SELECT` 权限的数据库用户。
 
+离线比较静态扫描与 MySQL Flyway history：
+
+```bash
+repoevidence reconcile /path/to/repository
+```
+
+`reconcile` 只读取 `.repoevidence/evidence.json` 和
+`.repoevidence/verification/mysql.json`，不连接数据库、不执行目标仓库代码，
+结果写入 `.repoevidence/reconciliation.json`。M5 第一阶段只识别 Flyway
+`matched`、`runtime_only`、`source_only`、`version_mismatch`、`runtime_failed`
+和 `ambiguous`，并将 Flyway baseline 单独记录在 summary 中。
+
 ## 当前能力
 
 - 提供可安装的 `repoevidence scan <repo-path>` CLI。

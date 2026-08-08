@@ -2,6 +2,7 @@ from pathlib import Path
 
 import typer
 
+from repoevidence.reconciliation import Reconciler
 from repoevidence.scanner import Scanner
 from repoevidence.verification.mysql import MySQLVerifier
 
@@ -36,6 +37,29 @@ def scan(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
     typer.echo(f"Evidence written to {output_path}")
+    if result.warnings:
+        typer.echo(f"Warnings: {len(result.warnings)}")
+    if result.errors:
+        typer.echo(f"Errors: {len(result.errors)}")
+
+
+@app.command("reconcile")
+def reconcile(
+    repo_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        metavar="REPO_PATH",
+    ),
+) -> None:
+    """Reconcile existing static and MySQL Flyway artifacts offline."""
+    root = repo_path.expanduser().resolve()
+    result = Reconciler().reconcile(root)
+    output_path = root / ".repoevidence" / "reconciliation.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    typer.echo(f"Reconciliation written to {output_path}")
     if result.warnings:
         typer.echo(f"Warnings: {len(result.warnings)}")
     if result.errors:
