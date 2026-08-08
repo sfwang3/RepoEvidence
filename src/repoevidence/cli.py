@@ -1,0 +1,43 @@
+from pathlib import Path
+
+import typer
+
+from repoevidence.scanner import Scanner
+
+app = typer.Typer(
+    name="repoevidence",
+    help="Deterministic, LLM-free software evidence collection.",
+    no_args_is_help=True,
+)
+
+
+@app.callback()
+def main() -> None:
+    """Deterministic, LLM-free software evidence collection."""
+
+
+@app.command("scan")
+def scan(
+    repo_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        metavar="REPO_PATH",
+    ),
+) -> None:
+    """Collect M0 repository metadata from REPO_PATH."""
+    root = repo_path.expanduser().resolve()
+    result = Scanner.default().scan(root)
+    output_path = root / ".repoevidence" / "evidence.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(result.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    typer.echo(f"Evidence written to {output_path}")
+    if result.warnings:
+        typer.echo(f"Warnings: {len(result.warnings)}")
+    if result.errors:
+        typer.echo(f"Errors: {len(result.errors)}")
+
+
+if __name__ == "__main__":
+    app()
