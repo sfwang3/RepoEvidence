@@ -3,6 +3,7 @@ from pathlib import Path
 import typer
 
 from repoevidence.reconciliation import Reconciler
+from repoevidence.reporting import ReportGenerationError, ReportGenerator
 from repoevidence.scanner import Scanner
 from repoevidence.verification.mysql import MySQLVerifier
 
@@ -64,6 +65,26 @@ def reconcile(
         typer.echo(f"Warnings: {len(result.warnings)}")
     if result.errors:
         typer.echo(f"Errors: {len(result.errors)}")
+
+
+@app.command("report")
+def report(
+    repo_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        metavar="REPO_PATH",
+    ),
+) -> None:
+    """Generate a self-contained offline HTML report from existing artifacts."""
+    root = repo_path.expanduser().resolve()
+    try:
+        output_path = ReportGenerator().generate(root)
+    except ReportGenerationError as exc:
+        typer.echo(f"Report error [{exc.code}]: {exc.message}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(f"Report written to {output_path}")
 
 
 @verify_app.command("mysql")

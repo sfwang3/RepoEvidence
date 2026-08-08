@@ -64,6 +64,16 @@ repoevidence reconcile /path/to/repository
 `matched`、`runtime_only`、`source_only`、`version_mismatch`、`runtime_failed`
 和 `ambiguous`，并将 Flyway baseline 单独记录在 summary 中。
 
+从已有 artifacts 生成完全离线的静态 HTML 报告：
+
+```bash
+repoevidence report /path/to/repository
+```
+
+报告写入 `/path/to/repository/.repoevidence/report/index.html`，可直接用浏览器打开。
+`report` 只读取已有的 `evidence.json`、可选的 MySQL verification 和 reconciliation
+artifacts，不执行 scan、verify、reconcile、目标仓库代码、数据库连接或网络请求。
+
 ## 当前能力
 
 - 提供可安装的 `repoevidence scan <repo-path>` CLI。
@@ -79,7 +89,8 @@ repoevidence reconcile /path/to/repository
 - 默认注册 `flyway_migration` Collector，从标准 `src/main/resources/db/migration` 目录静态提取 SQL migration 文件、版本顺序、repeatable 文件和同 migration set 内的重复版本冲突。
 - Flyway collector 只记录文件声明与 SHA-256，不执行 SQL、不连接数据库、不调用 Flyway，也不解析 SQL schema 语义。
 - `verify mysql` 只在显式调用时采集当前数据库的 schema metadata 和 `flyway_schema_history`；数据库中的 Flyway `checksum` 与源码文件 SHA-256 是不同概念。
+- `report` 展示 Evidence、Fact、静态 Spring/Maven/Flyway、MySQL runtime、reconciliation 和 artifact provenance；没有执行的可选 artifact 显示为 `Not available`，不会伪装成零值。
 
 ## 当前明确不包含
 
-当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、数据库写操作、Maven execution 或 Web UI。
+当前仍不包含 LLM、RAG、文档生成功能、Spring runtime、Actuator、DTO/Entity 分析、Swagger/OpenAPI、数据库写操作、Maven execution 或 Web UI。HTML report 是单文件离线输出，不需要 Node、前端构建或 Web server。
