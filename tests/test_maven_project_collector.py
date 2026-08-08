@@ -444,5 +444,10 @@ def test_default_scanner_runs_maven_after_spring(tmp_path: Path) -> None:
 
     result = Scanner.default().scan(tmp_path)
 
-    assert result.collectors == ["repository_metadata", "spring_api", "maven_project"]
+    assert result.collectors == [
+        "repository_metadata",
+        "spring_api",
+        "maven_project",
+        "flyway_migration",
+    ]
     assert any(fact.id.startswith("fact.maven.project.") for fact in result.facts)
