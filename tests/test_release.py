@@ -25,12 +25,23 @@ def test_project_metadata_is_ready_for_public_package() -> None:
     assert project["description"]
     assert project["readme"] == "README.md"
     assert project["requires-python"] == ">=3.12"
+    assert project["license"] == "Apache-2.0"
+    assert project["license-files"] == ["LICENSE"]
     assert project["authors"]
     assert project["urls"]["Homepage"] == "https://github.com/sfwang3/RepoEvidence"
     assert project["urls"]["Repository"] == "https://github.com/sfwang3/RepoEvidence"
     assert project["urls"]["Issues"] == "https://github.com/sfwang3/RepoEvidence/issues"
     assert "repoevidence = \"repoevidence.cli:app\"" in Path("pyproject.toml").read_text()
-    assert "license" not in project
+    assert "License :: OSI Approved" not in project["classifiers"]
+
+
+def test_official_apache_license_is_present() -> None:
+    license_text = Path("LICENSE").read_text(encoding="utf-8")
+
+    assert license_text.startswith("\n                                 Apache License\n")
+    assert "Version 2.0, January 2004" in license_text
+    assert "END OF TERMS AND CONDITIONS" in license_text
+    assert "APPENDIX: How to apply the Apache License to your work." in license_text
 
 
 def test_public_help_has_stable_commands_without_internal_milestones() -> None:

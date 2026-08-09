@@ -117,6 +117,6 @@ python -m twine check dist/*
 
 The package declares Python `>=3.12`. CI runs the test suite, linter, distribution build, and distribution metadata checks without requiring a live database.
 
-## License status
+## License
 
-This repository currently does not include a `LICENSE` file. Choose and add the project's intended license before publishing to PyPI.
+RepoEvidence is licensed under the Apache License 2.0.
