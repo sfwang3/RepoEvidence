@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import tomllib
+from importlib.resources import files
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -31,8 +32,40 @@ def test_project_metadata_is_ready_for_public_package() -> None:
     assert project["urls"]["Homepage"] == "https://github.com/sfwang3/RepoEvidence"
     assert project["urls"]["Repository"] == "https://github.com/sfwang3/RepoEvidence"
     assert project["urls"]["Issues"] == "https://github.com/sfwang3/RepoEvidence/issues"
-    assert "repoevidence = \"repoevidence.cli:app\"" in Path("pyproject.toml").read_text()
+    assert project["urls"]["简体中文文档"] == "https://github.com/sfwang3/RepoEvidence/blob/main/README.zh-CN.md"
+    assert "repoevidence = \"repoevidence.cli:main\"" in Path("pyproject.toml").read_text()
     assert "License :: OSI Approved" not in project["classifiers"]
+
+
+def test_localization_module_is_a_package_resource() -> None:
+    assert files("repoevidence").joinpath("i18n.py").is_file()
+
+
+def test_bilingual_readmes_keep_github_and_pypi_roles_clear() -> None:
+    english = Path("README.md").read_text(encoding="utf-8")
+    chinese = Path("README.zh-CN.md").read_text(encoding="utf-8")
+    pypi = Path("README.pypi.md").read_text(encoding="utf-8")
+
+    assert english.startswith("# RepoEvidence\n\nEnglish | [简体中文](README.zh-CN.md)")
+    assert chinese.startswith("# RepoEvidence\n\n[English](README.md) | 简体中文")
+    for text in (
+        "Why RepoEvidence",
+        "Quick Start",
+        "repoevidence verify mysql",
+        "repoevidence reconcile",
+        "repoevidence report",
+        "ChargeSafe drift example",
+        "Security model",
+        "Limitations",
+        "Apache-2.0 License",
+        "为什么选择 RepoEvidence",
+        "快速开始",
+        "安全模型",
+        "限制",
+        "Apache-2.0 License",
+        "repoevidence --lang zh-CN",
+    ):
+        assert text in pypi
 
 
 def test_official_apache_license_is_present() -> None:

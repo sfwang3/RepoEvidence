@@ -585,10 +585,12 @@ def write_artifacts(
 
 
 def generate(root: Path, **kwargs: object) -> str:
+    language = str(kwargs.pop("language", "en"))
     write_artifacts(root, **kwargs)
     output = ReportGenerator().generate(
         root,
         generated_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        language=language,
     )
     return output.read_text(encoding="utf-8")
 
@@ -605,6 +607,96 @@ def test_evidence_only_report_is_self_contained_and_optional_sections_are_unavai
     assert "<script>" in html
     assert "href=\"http" not in html
     assert "src=\"http" not in html
+
+
+def test_english_report_declares_english_html_language(tmp_path: Path) -> None:
+    html = generate(tmp_path, include_runtime=False, include_reconciliation=False)
+
+    assert '<html lang="en">' in html
+
+
+def test_chinese_report_localizes_human_presentation_and_keeps_machine_values(
+    tmp_path: Path,
+) -> None:
+    html = generate(tmp_path, language="zh-CN")
+
+    assert '<html lang="zh-CN">' in html
+    for text in (
+        "RepoEvidence 报告",
+        "概览",
+        "静态 Facts",
+        "运行时已验证 Facts",
+        "Spring endpoints",
+        "Maven dependencies",
+        "仓库 Flyway migrations",
+        "MySQL tables",
+        "漂移 findings",
+        "Evidence 状态",
+        "已验证（verified）",
+        "RECONCILIATION / 漂移",
+        "检测到仓库与运行环境差异（DRIFT DETECTED）",
+        "仅存在于运行环境（runtime_only）",
+        "Fact 与 Evidence ledger",
+        "fact.spring.endpoint.fixture",
+        "ev.spring.endpoint",
+        "src/Api.java",
+        "筛选 endpoints",
+    ):
+        assert text in html
+    assert 'href="http' not in html
+    assert 'src="http' not in html
+
+    reconciliation_path = tmp_path / ".repoevidence" / "reconciliation.json"
+    reconciliation = json.loads(reconciliation_path.read_text(encoding="utf-8"))
+    reconciliation["summary"]["source_only"] = 1
+    reconciliation["findings"].append(
+        {
+            "id": "recon.source_only.version.4",
+            "kind": "source_only",
+            "version": "4",
+            "version_key": [4],
+            "message": "Flyway source migration 4 has no runtime history row.",
+            "references": [
+                {
+                    "artifact": "static_scan",
+                    "reference_type": "fact",
+                    "id": "fact.flyway.migration.version.4",
+                }
+            ],
+            "details": {"source_file": "V4__source.sql"},
+        }
+    )
+    reconciliation_path.write_text(
+        json.dumps(reconciliation, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    source_only_html = ReportGenerator().generate(
+        tmp_path,
+        generated_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        language="zh-CN",
+    ).read_text(encoding="utf-8")
+    assert "仅存在于源码仓库（source_only）" in source_only_html
+
+    unavailable_html = generate(
+        tmp_path / "unavailable",
+        language="zh-CN",
+        include_runtime=False,
+        include_reconciliation=False,
+    )
+    assert "暂无数据" in unavailable_html
+
+
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+def test_report_escapes_untrusted_values_in_both_languages(
+    tmp_path: Path,
+    language: str,
+) -> None:
+    html = generate(tmp_path, language=language, malicious=True, include_secret=True)
+
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "dont-render-me" not in html
+    assert "also-secret" not in html
 
 
 def test_evidence_and_mysql_report_keeps_reconciliation_unavailable(tmp_path: Path) -> None:
@@ -756,18 +848,22 @@ def test_html_escapes_untrusted_values_and_redacts_secret_like_values(tmp_path: 
     assert "[redacted]" in html
 
 
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
 def test_report_does_not_modify_input_artifacts_and_is_stable_for_fixed_time(
     tmp_path: Path,
+    language: str,
 ) -> None:
     paths = write_artifacts(tmp_path)
     before = {name: hashlib.sha256(value).hexdigest() for name, value in paths.items()}
     first = ReportGenerator().generate(
         tmp_path,
         generated_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        language=language,
     ).read_bytes()
     second = ReportGenerator().generate(
         tmp_path,
         generated_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        language=language,
     ).read_bytes()
 
     assert first == second

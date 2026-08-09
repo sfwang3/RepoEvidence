@@ -1,4 +1,4 @@
-from repoevidence.cli import app
+from repoevidence.cli import main
 
 if __name__ == "__main__":
-    app()
+    main()

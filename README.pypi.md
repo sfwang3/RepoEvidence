@@ -30,6 +30,19 @@ repoevidence report /path/to/repository
 
 The scan writes `.repoevidence/evidence.json`. The report writes a self-contained HTML file to `.repoevidence/report/index.html`; open it directly in a browser. Report generation does not start a server, install frontend dependencies, access the network, or execute the target repository.
 
+### Language and human-facing output
+
+RepoEvidence supports English (`en`) and Simplified Chinese (`zh-CN`) for human-facing help, CLI messages, and HTML reports:
+
+```bash
+repoevidence --lang zh-CN scan /path/to/repository
+repoevidence --lang zh-CN --help
+```
+
+The global option is `--lang auto|en|zh-CN`, and the default is `auto`. Resolution order is CLI `--lang`, `REPOEVIDENCE_LANG`, system locale, then English fallback. A clear Chinese system locale such as `zh_CN`, `zh-CN`, or `Chinese` selects `zh-CN`. Invalid locale detection never makes the CLI fail; an invalid explicit language is reported clearly.
+
+Localization changes only human-facing presentation. Command names, option names, environment variable names, JSON keys, schema versions, IDs, status values, reconciliation kinds, and error codes remain stable English machine-facing contracts. Raw repository paths, endpoints, source names, migration filenames, and artifact values are preserved as observed.
+
 ## CLI
 
 ### Static scan
@@ -47,6 +60,8 @@ repoevidence report /path/to/repository
 ```
 
 The report reads the existing static scan and, when present, MySQL verification and reconciliation artifacts. Missing optional artifacts are shown as `Not available`; the command never runs those upstream operations automatically.
+
+The report language follows the selected language. English reports use `<html lang="en">`; Chinese reports use `<html lang="zh-CN">` and display statuses such as `已验证（verified）` while preserving the canonical artifact value `verified`.
 
 ### Explicit MySQL verification
 
@@ -163,6 +178,19 @@ repoevidence report /path/to/repository
 
 `scan` 会写入 `.repoevidence/evidence.json`。`report` 会将 self-contained（自包含）的 HTML 文件写入 `.repoevidence/report/index.html`；可以直接在浏览器中打开。HTML Report 不会启动服务器、安装前端依赖、访问网络或执行目标仓库。
 
+### 语言与人类可读输出（Language and human-facing output）
+
+RepoEvidence 为人类可读的 help、CLI 消息和 HTML Report 支持 English（`en`）与简体中文（`zh-CN`）：
+
+```bash
+repoevidence --lang zh-CN scan /path/to/repository
+repoevidence --lang zh-CN --help
+```
+
+全局 option 是 `--lang auto|en|zh-CN`，默认值为 `auto`。解析优先级为 CLI `--lang`、`REPOEVIDENCE_LANG`、系统 locale，最后 fallback 到 English。系统 locale 明确表示中文环境（例如 `zh_CN`、`zh-CN` 或 `Chinese`）时选择 `zh-CN`。locale 检测失败不会导致 CLI 失败；显式指定不支持的语言时会给出清晰错误。
+
+本地化只改变人类可读的 presentation。命令名、option 名、环境变量名、JSON keys、schema version、IDs、status values、reconciliation kinds 和 error codes 等 machine-facing contract 始终保持稳定的英文。用户仓库的原始路径、endpoint、source name、migration filename 和 artifact value 按原值展示。
+
 ## CLI
 
 ### 静态 scan（Static scan）
@@ -180,6 +208,8 @@ repoevidence report /path/to/repository
 ```
 
 `report` 读取已有的静态 scan，以及（如果存在）MySQL Verification 和 Reconciliation artifacts。缺少的可选 artifacts 会显示为 `Not available`；该命令不会自动运行这些上游操作。
+
+HTML Report 会跟随当前语言生成：英文报告使用 `<html lang="en">`；中文报告使用 `<html lang="zh-CN">`，并以 `已验证（verified）` 这样的双显示形式呈现状态，同时保留 artifact 中的 canonical value `verified`。
 
 ### 显式 MySQL Verification（Explicit MySQL verification）
 

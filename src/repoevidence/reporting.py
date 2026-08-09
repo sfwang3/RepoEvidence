@@ -14,6 +14,14 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from repoevidence import __version__
+from repoevidence.i18n import (
+    Language,
+    finding_label,
+    finding_message,
+    message,
+    resolve_language,
+    status_label,
+)
 from repoevidence.models import (
     Evidence,
     Fact,
@@ -59,6 +67,7 @@ class _Artifact:
     parsed: ScanResult | VerificationResult | ReconciliationResult | None
     time_labels: tuple[tuple[str, str], ...]
     error: str | None = None
+    error_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +80,7 @@ class _ReportData:
     runtime_result: VerificationResult | None
     reconciliation_result: ReconciliationResult | None
     generated_at: datetime
+    language: Language
 
 
 class ReportGenerator:
@@ -80,15 +90,21 @@ class ReportGenerator:
         self,
         repo_path: str | Path,
         generated_at: datetime | None = None,
+        language: str = "en",
     ) -> Path:
         root = Path(repo_path).expanduser().resolve()
-        data = self._load(root, generated_at)
+        data = self._load(root, generated_at, resolve_language(language))
         output_path = root / REPORT_RELATIVE_PATH
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(self._render(data), encoding="utf-8")
         return output_path
 
-    def _load(self, root: Path, generated_at: datetime | None) -> _ReportData:
+    def _load(
+        self,
+        root: Path,
+        generated_at: datetime | None,
+        language: Language,
+    ) -> _ReportData:
         static = self._load_artifact(
             root / STATIC_RELATIVE_PATH,
             "static_scan",
@@ -128,6 +144,7 @@ class ReportGenerator:
                 else None
             ),
             generated_at=timestamp,
+            language=language,
         )
 
     @staticmethod
@@ -158,6 +175,7 @@ class ReportGenerator:
                 parsed=None,
                 time_labels=(),
                 error="Not available",
+                error_key="report.artifact_missing",
             )
         raw = b""
         try:
@@ -178,6 +196,7 @@ class ReportGenerator:
                 parsed=None,
                 time_labels=(),
                 error="Artifact is not valid JSON",
+                error_key="report.artifact_invalid_json",
             )
         if not isinstance(payload, dict):
             if required:
@@ -194,6 +213,7 @@ class ReportGenerator:
                 parsed=None,
                 time_labels=(),
                 error="Artifact must contain a JSON object",
+                error_key="report.artifact_invalid_object",
             )
         schema_version = payload.get("schema_version")
         if schema_version != SUPPORTED_SCHEMA_VERSION:
@@ -211,6 +231,7 @@ class ReportGenerator:
                 parsed=None,
                 time_labels=(),
                 error="Artifact schema is unsupported",
+                error_key="report.artifact_schema_unsupported",
             )
         try:
             parsed = parser.model_validate(payload)
@@ -229,6 +250,7 @@ class ReportGenerator:
                 parsed=None,
                 time_labels=(),
                 error="Artifact failed schema validation",
+                error_key="report.artifact_schema_invalid",
             )
         return _Artifact(
             artifact=artifact,
@@ -241,6 +263,7 @@ class ReportGenerator:
         )
 
     def _render(self, data: _ReportData) -> str:
+        language = data.language
         sections = [
             self._render_overview(data),
             self._render_status(data),
@@ -254,40 +277,42 @@ class ReportGenerator:
         ]
         body = "\n".join(sections)
         generated = _e(data.generated_at.isoformat())
+        repository_name = Path(data.root).name or data.root
         return f"""<!doctype html>
-<html lang="en">
+<html lang="{_e(language)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RepoEvidence report — {_e(Path(data.root).name or data.root)}</title>
+  <title>{_e(message("report.title", language, name=repository_name))}</title>
   <style>{_CSS}</style>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to report content</a>
+  <a class="skip-link" href="#main">{_e(message("report.skip_link", language))}</a>
   <header class="hero">
     <div class="hero-grid">
       <div>
-        <p class="eyebrow">REPOEVIDENCE / LOCAL SNAPSHOT</p>
-        <h1>Evidence, arranged for inspection.</h1>
-        <p class="hero-copy">A static, source-grounded view of what the repository declares, what runtime verification observed, and where the snapshots disagree.</p>
+        <p class="eyebrow">{_e(message("report.hero.eyebrow", language))}</p>
+        <h1>{_e(message("report.hero.title", language))}</h1>
+        <p class="hero-copy">{_e(message("report.hero.copy", language))}</p>
       </div>
-      <div class="hero-stamp" aria-label="Report generated time">
-        <span>Generated</span>
+      <div class="hero-stamp" aria-label="{_e(message("report.generated_aria", language))}">
+        <span>{_e(message("report.generated", language))}</span>
         <strong>{generated}</strong>
-        <small>Tool version {_e(__version__)}</small>
+        <small>{_e(message("report.tool_version", language, version=__version__))}</small>
       </div>
     </div>
   </header>
   <main id="main" class="shell">
     {body}
   </main>
-  <footer class="footer">Generated locally by RepoEvidence. No network, server, or runtime execution required.</footer>
+  <footer class="footer">{_e(message("report.footer", language))}</footer>
   <script>{_JS}</script>
 </body>
 </html>
 """
 
     def _render_overview(self, data: _ReportData) -> str:
+        language = data.language
         facts = data.static_result.facts
         static_collectors = set(data.static_result.collectors)
         runtime = data.runtime_result
@@ -295,61 +320,63 @@ class ReportGenerator:
         git_commit = _fact_value(facts, "HEAD commit")
         branch = _fact_value(facts, "Current branch")
         stats = [
-            ("Static Facts", str(len(facts)), True),
+            ("report.static_facts", str(len(facts)), True),
             (
-                "Runtime Verified Facts",
+                "report.runtime_verified_facts",
                 str(sum(fact.status == "verified" for fact in runtime.facts))
                 if runtime is not None
-                else "Not available",
+                else message("report.not_available", language),
                 runtime is not None,
             ),
             (
-                "Spring Endpoints",
+                "report.spring_endpoints",
                 str(sum(fact.id.startswith("fact.spring.endpoint.") for fact in facts))
                 if "spring_api" in static_collectors
-                else "Not available",
+                else message("report.not_available", language),
                 "spring_api" in static_collectors,
             ),
             (
-                "Maven Dependencies",
+                "report.maven_dependencies",
                 str(sum(_is_direct_maven_dependency(fact) for fact in facts))
                 if "maven_project" in static_collectors
-                else "Not available",
+                else message("report.not_available", language),
                 "maven_project" in static_collectors,
             ),
             (
-                "Repository Flyway Migrations",
+                "report.repository_flyway_migrations",
                 str(sum(_is_source_migration(fact) for fact in facts))
                 if "flyway_migration" in static_collectors
-                else "Not available",
+                else message("report.not_available", language),
                 "flyway_migration" in static_collectors,
             ),
             (
-                "MySQL Tables",
+                "report.mysql_tables",
                 str(sum(fact.name == "MySQL base table" for fact in runtime.facts))
                 if runtime is not None
-                else "Not available",
+                else message("report.not_available", language),
                 runtime is not None,
             ),
             (
-                "Drift Findings",
-                str(len(recon.findings)) if recon is not None else "Not available",
+                "report.drift_findings",
+                str(len(recon.findings))
+                if recon is not None
+                else message("report.not_available", language),
                 recon is not None,
             ),
         ]
         stat_cards = "".join(
             f'<article class="stat-card {"available" if available else "unavailable"}">'
-            f'<span>{_e(label)}</span><strong>{_e(value)}</strong></article>'
-            for label, value, available in stats
+            f'<span>{_e(message(label_key, language))}</span><strong>{_e(value)}</strong></article>'
+            for label_key, value, available in stats
         )
         content = f"""
         <section class="overview section" id="overview">
-          <div class="section-heading"><div><p class="eyebrow">OVERVIEW</p><h2>Repository snapshot</h2></div><span class="section-index">01</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.overview.eyebrow", language))}</p><h2>{_e(message("report.overview.title", language))}</h2></div><span class="section-index">01</span></div>
           <div class="identity-grid">
-            <div><span class="label">Repository path</span><code>{_e(data.root)}</code></div>
-            <div><span class="label">Display name</span><strong>{_e(Path(data.root).name or data.root)}</strong></div>
-            <div><span class="label">Git commit</span><code>{_display(git_commit)}</code></div>
-            <div><span class="label">Branch</span><code>{_display(branch)}</code></div>
+            <div><span class="label">{_e(message("report.repository_path", language))}</span><code>{_e(data.root)}</code></div>
+            <div><span class="label">{_e(message("report.display_name", language))}</span><strong>{_e(Path(data.root).name or data.root)}</strong></div>
+            <div><span class="label">{_e(message("report.git_commit", language))}</span><code>{_display(git_commit, language)}</code></div>
+            <div><span class="label">{_e(message("report.branch", language))}</span><code>{_display(branch, language)}</code></div>
           </div>
           <div class="stat-grid">{stat_cards}</div>
         </section>
@@ -357,92 +384,120 @@ class ReportGenerator:
         return content
 
     def _render_status(self, data: _ReportData) -> str:
+        language = data.language
         static_counts = _status_counts(data.static_result.facts)
         runtime_counts = _status_counts(data.runtime_result.facts) if data.runtime_result else None
         rows = []
         for status in ("declared", "inferred", "verified", "conflicted"):
-            runtime_value = str(runtime_counts[status]) if runtime_counts is not None else "Not available"
+            runtime_value = (
+                str(runtime_counts[status])
+                if runtime_counts is not None
+                else message("report.not_available", language)
+            )
             rows.append(
-                f"<tr><th>{_e(status)}</th><td>{static_counts[status]}</td><td>{_e(runtime_value)}</td></tr>"
+                f"<tr><th>{_e(status_label(status, language))}</th><td>{static_counts[status]}</td><td>{_e(runtime_value)}</td></tr>"
             )
         return f"""
         <section class="section" id="evidence-status">
-          <div class="section-heading"><div><p class="eyebrow">EVIDENCE STATUS</p><h2>Facts keep their epistemic boundary</h2></div><span class="section-index">02</span></div>
-          <p class="section-note">Declared and inferred statements remain visibly different from verified runtime observations. No health score is inferred.</p>
-          <div class="table-wrap"><table><thead><tr><th>Status</th><th>Static scan</th><th>MySQL verification</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.evidence_status.eyebrow", language))}</p><h2>{_e(message("report.evidence_status.title", language))}</h2></div><span class="section-index">02</span></div>
+          <p class="section-note">{_e(message("report.evidence_status.note", language))}</p>
+          <div class="table-wrap"><table><thead><tr><th>{_e(message("report.status", language))}</th><th>{_e(message("report.static_scan", language))}</th><th>{_e(message("report.mysql_verification", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
         </section>
         """
 
     def _render_reconciliation(self, data: _ReportData) -> str:
+        language = data.language
         recon = data.reconciliation_result
         if recon is None:
             return self._unavailable_section(
                 "reconciliation",
                 "03",
-                "RECONCILIATION / DRIFT",
-                "Not available",
-                data.reconciliation.error or "No reconciliation artifact was supplied.",
+                message("report.reconciliation.eyebrow", language),
+                message("report.not_available", language),
+                _artifact_note(data.reconciliation, language),
+                language=language,
             )
         summary = recon.summary
         drift = (
-            '<div class="drift-banner"><span class="drift-dot"></span><strong>DRIFT DETECTED</strong><span>Repository and runtime Flyway snapshots are not identical.</span></div>'
+            f'<div class="drift-banner"><span class="drift-dot"></span><strong>{_e(message("report.drift.detected", language))}</strong><span>{_e(message("report.drift.detected.note", language))}</span></div>'
             if summary.drift_detected
-            else '<div class="match-banner"><span class="match-dot"></span><strong>No drift detected</strong><span>All reported reconciliation findings are aligned.</span></div>'
+            else f'<div class="match-banner"><span class="match-dot"></span><strong>{_e(message("report.drift.none", language))}</strong><span>{_e(message("report.drift.none.note", language))}</span></div>'
         )
         summary_values = [
-            ("Matched", summary.matched),
-            ("Runtime-only", summary.runtime_only),
-            ("Source-only", summary.source_only),
-            ("Version mismatch", summary.version_mismatch),
-            ("Runtime failed", summary.runtime_failed),
-            ("Ambiguous", summary.ambiguous),
-            ("Repository max version", summary.repository_max_version),
-            ("Runtime max successful", summary.runtime_max_successful_version),
-            ("Runtime baseline", summary.runtime_baseline_version),
+            ("report.matched", summary.matched),
+            ("report.runtime_only", summary.runtime_only),
+            ("report.source_only", summary.source_only),
+            ("report.version_mismatch", summary.version_mismatch),
+            ("report.runtime_failed", summary.runtime_failed),
+            ("report.ambiguous", summary.ambiguous),
+            ("report.repository_max_version", summary.repository_max_version),
+            ("report.runtime_max_successful", summary.runtime_max_successful_version),
+            ("report.runtime_baseline", summary.runtime_baseline_version),
         ]
         summary_cards = "".join(
-            f'<div class="mini-stat"><span>{_e(label)}</span><strong>{_display(value)}</strong></div>'
-            for label, value in summary_values
+            f'<div class="mini-stat"><span>{_e(message(label_key, language))}</span><strong>{_display(value, language)}</strong></div>'
+            for label_key, value in summary_values
         )
         source_versions = _source_versions(data.static_result.facts)
         runtime_versions = _runtime_versions(data.runtime_result.facts) if data.runtime_result else []
         narrative = (
-            f'<div class="flyway-compare"><div><span class="label">Repository Flyway</span><strong>{_e(_version_range(source_versions) or "Not available")}</strong></div>'
-            f'<div><span class="label">Runtime Flyway</span><strong>{_e(_runtime_version_line(summary.runtime_baseline_version, runtime_versions) or "Not available")}</strong></div></div>'
+            f'<div class="flyway-compare"><div><span class="label">{_e(message("report.repository_flyway", language))}</span><strong>{_e(_version_range(source_versions) or message("report.not_available", language))}</strong></div>'
+            f'<div><span class="label">{_e(message("report.runtime_flyway", language))}</span><strong>{_e(_runtime_version_line(summary.runtime_baseline_version, runtime_versions) or message("report.not_available", language))}</strong></div></div>'
         )
-        findings = "".join(self._render_finding(finding) for finding in sorted(recon.findings, key=_finding_sort_key))
-        findings = findings or '<p class="empty-note">No reconciliation findings.</p>'
+        findings = "".join(
+            self._render_finding(finding, language)
+            for finding in sorted(recon.findings, key=_finding_sort_key)
+        )
+        findings = findings or f'<p class="empty-note">{_e(message("report.no_reconciliation_findings", language))}</p>'
         return f"""
         <section class="section section-drift" id="reconciliation">
-          <div class="section-heading"><div><p class="eyebrow">RECONCILIATION / DRIFT</p><h2>Where snapshots disagree</h2></div><span class="section-index">03</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.reconciliation.eyebrow", language))}</p><h2>{_e(message("report.reconciliation.title", language))}</h2></div><span class="section-index">03</span></div>
           {drift}
           <div class="mini-stat-grid">{summary_cards}</div>
           {narrative}
-          <div class="finding-list"><div class="subheading"><h3>Findings</h3><span>{len(recon.findings)} total</span></div>{findings}</div>
+          <div class="finding-list"><div class="subheading"><h3>{_e(message("report.findings", language))}</h3><span>{_e(message("report.total", language, count=len(recon.findings)))}</span></div>{findings}</div>
         </section>
         """
 
-    def _render_finding(self, finding: Any) -> str:
+    def _render_finding(self, finding: Any, language: Language) -> str:
         detail_items = []
         for key in ("source_file", "runtime_script"):
             if key in finding.details:
-                detail_items.append(f"<dt>{_e(key.replace('_', ' '))}</dt><dd><code>{_display(finding.details[key])}</code></dd>")
+                detail_items.append(
+                    f"<dt>{_e(message(f'report.{key}', language))}</dt>"
+                    f"<dd><code>{_display(finding.details[key], language)}</code></dd>"
+                )
         refs = "".join(
             f'<li><span>{_e(reference.artifact)} / {_e(reference.reference_type)}</span><code>{_e(reference.id)}</code></li>'
             for reference in finding.references
         )
+        fallback_message = str(finding.message)
+        rendered_message = finding_message(
+            finding.kind,
+            language,
+            version=finding.version,
+            fallback=fallback_message,
+        )
         return f"""
         <article class="finding finding-{_e(finding.kind)}">
-          <div class="finding-top"><strong>V{_display(finding.version)}</strong><span class="status-pill">{_e(finding.kind)}</span><code>{_e(finding.id)}</code></div>
-          <p>{_e(finding.message)}</p>
+          <div class="finding-top"><strong>V{_display(finding.version, language)}</strong><span class="status-pill">{_e(finding_label(finding.kind, language))}</span><code>{_e(finding.id)}</code></div>
+          <p>{_e(rendered_message)}</p>
           {f'<dl class="compact-dl">{"".join(detail_items)}</dl>' if detail_items else ''}
-          <div class="reference-block"><span class="label">References</span><ul>{refs}</ul></div>
+          <div class="reference-block"><span class="label">{_e(message("report.references", language))}</span><ul>{refs}</ul></div>
         </article>
         """
 
     def _render_spring(self, data: _ReportData) -> str:
+        language = data.language
         if "spring_api" not in data.static_result.collectors:
-            return self._unavailable_section("spring", "04", "SPRING API", "Spring API", "Not available — Spring collector was not present in this scan.")
+            return self._unavailable_section(
+                "spring",
+                "04",
+                message("report.spring.eyebrow", language),
+                message("report.spring.title", language),
+                message("report.artifact_missing", language),
+                language=language,
+            )
         facts = sorted(
             (fact for fact in data.static_result.facts if fact.id.startswith("fact.spring.endpoint.")),
             key=lambda fact: (
@@ -453,16 +508,23 @@ class ReportGenerator:
             ),
         )
         evidence_by_id = {item.id: item for item in data.static_result.evidence}
-        endpoints = "".join(self._render_endpoint(fact, evidence_by_id) for fact in facts)
+        endpoints = "".join(
+            self._render_endpoint(fact, evidence_by_id, language) for fact in facts
+        )
         return f"""
         <section class="section" id="spring-api">
-          <div class="section-heading"><div><p class="eyebrow">SPRING API</p><h2>Spring API / Static endpoint map</h2></div><span class="section-index">04</span></div>
-          <div class="section-toolbar"><p>{len(facts)} endpoints inferred from static annotations. HTTP response status is not present in static evidence; fact status is shown below.</p><label>Filter endpoints <input type="search" data-endpoint-filter placeholder="method, path, controller" aria-label="Filter Spring endpoints"></label></div>
-          <div class="endpoint-list">{endpoints or '<p class="empty-note">No endpoint facts.</p>'}</div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.spring.eyebrow", language))}</p><h2>{_e(message("report.spring.title", language))}</h2></div><span class="section-index">04</span></div>
+          <div class="section-toolbar"><p>{_e(message("report.spring.toolbar", language, count=len(facts)))}</p><label>{_e(message("report.filter_endpoints", language))} <input type="search" data-endpoint-filter placeholder="{_e(message("report.filter_placeholder", language))}" aria-label="{_e(message("report.filter_aria", language))}"></label></div>
+          <div class="endpoint-list">{endpoints or f'<p class="empty-note">{_e(message("report.no_endpoint_facts", language))}</p>'}</div>
         </section>
         """
 
-    def _render_endpoint(self, fact: Fact, evidence_by_id: Mapping[str, Evidence]) -> str:
+    def _render_endpoint(
+        self,
+        fact: Fact,
+        evidence_by_id: Mapping[str, Evidence],
+        language: Language,
+    ) -> str:
         value = fact.value if isinstance(fact.value, dict) else {}
         linked = [evidence_by_id[item] for item in fact.evidence_ids if item in evidence_by_id]
         source = next((item.value.get("source_file") for item in linked if isinstance(item.value, dict)), None)
@@ -478,58 +540,74 @@ class ReportGenerator:
         )
         return f"""
         <details class="endpoint-row" data-endpoint-row>
-          <summary><span class="method method-{_e(str(value.get("method", "")).lower())}">{_e(value.get("method"))}</span><code>{_e(value.get("path"))}</code><span>{_e(value.get("controller"))}</span><span>{_e(value.get("handler"))}</span><span class="status-pill">{_e(fact.status)}</span></summary>
+          <summary><span class="method method-{_e(str(value.get("method", "")).lower())}">{_e(value.get("method"))}</span><code>{_e(value.get("path"))}</code><span>{_e(value.get("controller"))}</span><span>{_e(value.get("handler"))}</span><span class="status-pill">{_e(status_label(fact.status, language))}</span></summary>
           <div class="detail-grid">
-            <div><span class="label">Fact ID</span><code>{_e(fact.id)}</code></div>
-            <div><span class="label">Source location</span><code>{_display(source)}{f' · line {_e(line)}' if line is not None else ''}</code></div>
-            <div><span class="label">Evidence IDs</span><ul class="plain-list">{evidence_rows}</ul></div>
-            <div><span class="label">Annotation information</span><ul class="plain-list">{annotations or '<li>Not available</li>'}</ul></div>
+            <div><span class="label">{_e(message("report.fact_id", language))}</span><code>{_e(fact.id)}</code></div>
+            <div><span class="label">{_e(message("report.source_location", language))}</span><code>{_display(source, language)}{f' · {_e(message("report.line", language, value=line))}' if line is not None else ''}</code></div>
+            <div><span class="label">{_e(message("report.evidence_ids", language))}</span><ul class="plain-list">{evidence_rows}</ul></div>
+            <div><span class="label">{_e(message("report.annotation_information", language))}</span><ul class="plain-list">{annotations or f'<li>{_e(message("report.not_available", language))}</li>'}</ul></div>
           </div>
         </details>
         """
 
     def _render_maven(self, data: _ReportData) -> str:
+        language = data.language
         if "maven_project" not in data.static_result.collectors:
-            return self._unavailable_section("maven", "05", "MAVEN DECLARATIONS", "Maven declarations", "Not available — Maven collector was not present in this scan.")
+            return self._unavailable_section(
+                "maven",
+                "05",
+                message("report.maven.eyebrow", language),
+                message("report.maven.title", language),
+                message("report.artifact_missing", language),
+                language=language,
+            )
         facts = sorted((fact for fact in data.static_result.facts if fact.id.startswith("fact.maven.")), key=lambda fact: fact.id)
         groups: list[tuple[str, list[Fact]]] = [
-            ("Project coordinates", [fact for fact in facts if fact.id.startswith("fact.maven.project.")]),
-            ("Java-related declarations", [fact for fact in facts if fact.id.startswith("fact.maven.java_baseline.") or fact.id.startswith("fact.maven.property.")]),
-            ("Spring Boot parent declaration", [fact for fact in facts if fact.id.startswith("fact.maven.parent.") or fact.id.startswith("fact.maven.spring_boot.")]),
-            ("Dependencies", [fact for fact in facts if fact.id.startswith("fact.maven.dependency.") and fact.value.get("location") == "dependencies"]),
-            ("dependencyManagement", [fact for fact in facts if fact.id.startswith("fact.maven.dependency.") and fact.value.get("location") == "dependencyManagement"]),
-            ("Plugins", [fact for fact in facts if fact.id.startswith("fact.maven.plugin.")]),
-            ("Modules", [fact for fact in facts if fact.id.startswith("fact.maven.module.")]),
+            ("report.project_coordinates", [fact for fact in facts if fact.id.startswith("fact.maven.project.")]),
+            ("report.java_declarations", [fact for fact in facts if fact.id.startswith("fact.maven.java_baseline.") or fact.id.startswith("fact.maven.property.")]),
+            ("report.spring_boot_parent", [fact for fact in facts if fact.id.startswith("fact.maven.parent.") or fact.id.startswith("fact.maven.spring_boot.")]),
+            ("report.dependencies", [fact for fact in facts if fact.id.startswith("fact.maven.dependency.") and fact.value.get("location") == "dependencies"]),
+            ("report.dependency_management", [fact for fact in facts if fact.id.startswith("fact.maven.dependency.") and fact.value.get("location") == "dependencyManagement"]),
+            ("report.plugins", [fact for fact in facts if fact.id.startswith("fact.maven.plugin.")]),
+            ("report.modules", [fact for fact in facts if fact.id.startswith("fact.maven.module.")]),
         ]
         groups_html = "".join(
-            f'<div class="maven-group"><div class="subheading"><h3>{_e(title)}</h3><span>{len(items)}</span></div>{self._render_maven_table(items)}</div>'
-            for title, items in groups
+            f'<div class="maven-group"><div class="subheading"><h3>{_e(message(title_key, language))}</h3><span>{len(items)}</span></div>{self._render_maven_table(items, language)}</div>'
+            for title_key, items in groups
         )
         return f"""
         <section class="section" id="maven">
-          <div class="section-heading"><div><p class="eyebrow">MAVEN DECLARATIONS</p><h2>Maven declarations / Build intent</h2></div><span class="section-index">05</span></div>
-          <p class="section-note">Declared only; no Effective POM resolution, dependency download, or final Maven resolved state is claimed.</p>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.maven.eyebrow", language))}</p><h2>{_e(message("report.maven.title", language))}</h2></div><span class="section-index">05</span></div>
+          <p class="section-note">{_e(message("report.maven.note", language))}</p>
           {groups_html}
         </section>
         """
 
     @staticmethod
-    def _render_maven_table(facts: list[Fact]) -> str:
+    def _render_maven_table(facts: list[Fact], language: Language) -> str:
         if not facts:
-            return '<p class="empty-note">No declarations.</p>'
+            return f'<p class="empty-note">{_e(message("report.no_declarations", language))}</p>'
         rows = []
         for fact in facts:
             value = fact.value if isinstance(fact.value, dict) else {}
             subject = value.get("artifact_id") or value.get("source") or value.get("declared_field") or fact.name
             detail = value.get("resolved_value") or value.get("declared_value") or value.get("resolved_version") or value.get("declared_version") or value.get("module") or "—"
             rows.append(
-                f'<tr><td><strong>{_e(subject)}</strong><br><code>{_e(fact.id)}</code></td><td>{_display(detail)}</td><td><span class="status-pill">{_e(fact.status)}</span></td></tr>'
+                f'<tr><td><strong>{_e(subject)}</strong><br><code>{_e(fact.id)}</code></td><td>{_display(detail, language)}</td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
             )
-        return f'<div class="table-wrap"><table><thead><tr><th>Declaration</th><th>Value</th><th>Status</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+        return f'<div class="table-wrap"><table><thead><tr><th>{_e(message("report.declaration", language))}</th><th>{_e(message("report.value", language))}</th><th>{_e(message("report.status", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
     def _render_flyway(self, data: _ReportData) -> str:
+        language = data.language
         if "flyway_migration" not in data.static_result.collectors:
-            return self._unavailable_section("flyway", "06", "FLYWAY SOURCE", "Flyway source", "Not available — Flyway collector was not present in this scan.")
+            return self._unavailable_section(
+                "flyway",
+                "06",
+                message("report.flyway.eyebrow", language),
+                message("report.flyway.title", language),
+                message("report.artifact_missing", language),
+                language=language,
+            )
         migration_facts = sorted(
             (fact for fact in data.static_result.facts if _is_source_migration(fact) or _is_repeatable_migration(fact)),
             key=lambda fact: (_version_sort_key(fact.value.get("version")), fact.id),
@@ -538,30 +616,38 @@ class ReportGenerator:
         for fact in migration_facts:
             value = fact.value if isinstance(fact.value, dict) else {}
             rows.append(
-                f'<tr><td><code>{_display(value.get("version"))}</code></td><td>{_e(value.get("type"))}</td><td>{_e(value.get("source_file"))}</td><td><code>{_e(value.get("file_sha256"))}</code></td><td><span class="status-pill">{_e(fact.status)}</span></td></tr>'
+                f'<tr><td><code>{_display(value.get("version"), language)}</code></td><td>{_e(value.get("type"))}</td><td>{_e(value.get("source_file"))}</td><td><code>{_e(value.get("file_sha256"))}</code></td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
             )
         set_facts = sorted(
             (fact for fact in data.static_result.facts if fact.name == "Flyway migration set summary"),
             key=lambda fact: fact.id,
         )
         set_rows = "".join(
-            f'<tr><td><code>{_e(fact.value.get("migration_set"))}</code></td><td>{_display(fact.value.get("versioned_count"))}</td><td>{_display(fact.value.get("repeatable_count"))}</td><td><code>{_json_inline(fact.value.get("ordered_versions", []))}</code></td></tr>'
+            f'<tr><td><code>{_e(fact.value.get("migration_set"))}</code></td><td>{_display(fact.value.get("versioned_count"), language)}</td><td>{_display(fact.value.get("repeatable_count"), language)}</td><td><code>{_json_inline(fact.value.get("ordered_versions", []))}</code></td></tr>'
             for fact in set_facts
         )
         return f"""
         <section class="section" id="flyway">
-          <div class="section-heading"><div><p class="eyebrow">FLYWAY SOURCE</p><h2>Flyway source / What the repository declares</h2></div><span class="section-index">06</span></div>
-          <p class="section-note">Declared source migrations are not presented as executed runtime migrations.</p>
-          <div class="table-wrap"><table><thead><tr><th>Version</th><th>Type</th><th>Source filename</th><th>File SHA-256</th><th>Status</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="5">No migrations.</td></tr>'}</tbody></table></div>
-          <div class="subheading"><h3>Migration sets</h3><span>{len(set_facts)}</span></div>
-          <div class="table-wrap"><table><thead><tr><th>Migration set</th><th>Versioned</th><th>Repeatable</th><th>Ordered versions</th></tr></thead><tbody>{set_rows or '<tr><td colspan="4">No migration set summaries.</td></tr>'}</tbody></table></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.flyway.eyebrow", language))}</p><h2>{_e(message("report.flyway.title", language))}</h2></div><span class="section-index">06</span></div>
+          <p class="section-note">{_e(message("report.flyway.note", language))}</p>
+          <div class="table-wrap"><table><thead><tr><th>{_e(message("report.version", language))}</th><th>{_e(message("report.type", language))}</th><th>{_e(message("report.source_filename", language))}</th><th>{_e(message("report.file_sha256", language))}</th><th>{_e(message("report.status", language))}</th></tr></thead><tbody>{"".join(rows) or f'<tr><td colspan="5">{_e(message("report.no_migrations", language))}</td></tr>'}</tbody></table></div>
+          <div class="subheading"><h3>{_e(message("report.migration_sets", language))}</h3><span>{len(set_facts)}</span></div>
+          <div class="table-wrap"><table><thead><tr><th>{_e(message("report.migration_set", language))}</th><th>{_e(message("report.versioned", language))}</th><th>{_e(message("report.repeatable", language))}</th><th>{_e(message("report.ordered_versions", language))}</th></tr></thead><tbody>{set_rows or f'<tr><td colspan="4">{_e(message("report.no_migration_set_summaries", language))}</td></tr>'}</tbody></table></div>
         </section>
         """
 
     def _render_mysql(self, data: _ReportData) -> str:
+        language = data.language
         runtime = data.runtime_result
         if runtime is None:
-            return self._unavailable_section("mysql", "07", "MYSQL RUNTIME", "Not available", data.runtime.error or "MySQL verification was not supplied.")
+            return self._unavailable_section(
+                "mysql",
+                "07",
+                message("report.mysql.eyebrow", language),
+                message("report.not_available", language),
+                _artifact_note(data.runtime, language),
+                language=language,
+            )
         facts = runtime.facts
         server = _fact_value(facts, "MySQL server version")
         database = _fact_value(facts, "Selected MySQL database")
@@ -573,87 +659,113 @@ class ReportGenerator:
         constraint_counts = {kind: sum(fact.value.get("constraint_type") == kind for fact in constraints) for kind in ("PRIMARY KEY", "UNIQUE", "FOREIGN KEY")}
         table_names = "".join(f'<span class="tag"><code>{_e(fact.value.get("table_name"))}</code></span>' for fact in tables)
         history_rows = "".join(
-            f'<tr><td>{_display(fact.value.get("installed_rank"))}</td><td><code>{_display(fact.value.get("version"))}</code></td><td>{_e(fact.value.get("description"))}</td><td><code>{_e(fact.value.get("script"))}</code></td><td>{"success" if fact.value.get("success") else "failed"}</td></tr>'
+            f'<tr><td>{_display(fact.value.get("installed_rank"), language)}</td><td><code>{_display(fact.value.get("version"), language)}</code></td><td>{_e(fact.value.get("description"))}</td><td><code>{_e(fact.value.get("script"))}</code></td><td>{_e(message("report.success" if fact.value.get("success") else "report.failed", language))}</td></tr>'
             for fact in history
         )
         counts = [
-            ("Tables", len(tables)),
-            ("Columns", len(columns)),
-            ("PK", constraint_counts["PRIMARY KEY"]),
-            ("UNIQUE", constraint_counts["UNIQUE"]),
-            ("FK", constraint_counts["FOREIGN KEY"]),
-            ("Indexes", len(indexes)),
+            ("report.tables", len(tables)),
+            ("report.columns", len(columns)),
+            ("report.primary_key", constraint_counts["PRIMARY KEY"]),
+            ("report.unique", constraint_counts["UNIQUE"]),
+            ("report.foreign_key", constraint_counts["FOREIGN KEY"]),
+            ("report.indexes", len(indexes)),
         ]
-        count_html = "".join(f'<div class="mini-stat"><span>{_e(label)}</span><strong>{count}</strong></div>' for label, count in counts)
+        count_html = "".join(
+            f'<div class="mini-stat"><span>{_e(message(label_key, language))}</span><strong>{count}</strong></div>'
+            for label_key, count in counts
+        )
         return f"""
         <section class="section" id="mysql-runtime">
-          <div class="section-heading"><div><p class="eyebrow">MYSQL RUNTIME</p><h2>MySQL runtime / Verified observation</h2></div><span class="section-index">07</span></div>
-          <div class="runtime-banner"><strong>Verified runtime observation</strong><span>Observed {_display(runtime.metadata.observed_at or runtime.metadata.finished_at)}</span></div>
-          <div class="identity-grid"><div><span class="label">Server version</span><strong>{_display(server)}</strong></div><div><span class="label">Selected database</span><strong>{_display(database)}</strong></div></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.mysql.eyebrow", language))}</p><h2>{_e(message("report.mysql.title", language))}</h2></div><span class="section-index">07</span></div>
+          <div class="runtime-banner"><strong>{_e(message("report.verified_runtime", language))}</strong><span>{_e(message("report.observed", language, value=_display(runtime.metadata.observed_at or runtime.metadata.finished_at, language)))}</span></div>
+          <div class="identity-grid"><div><span class="label">{_e(message("report.server_version", language))}</span><strong>{_display(server, language)}</strong></div><div><span class="label">{_e(message("report.selected_database", language))}</span><strong>{_display(database, language)}</strong></div></div>
           <div class="mini-stat-grid">{count_html}</div>
-          <div class="subheading"><h3>Base tables</h3><span>{len(tables)} tables · {len(columns)} columns</span></div>
-          <div class="tag-list">{table_names or '<span class="empty-note">No tables.</span>'}</div>
-          <div class="subheading"><h3>Flyway runtime history</h3><span>{len(history)} rows</span></div>
-          <div class="table-wrap"><table><thead><tr><th>Rank</th><th>Version</th><th>Description</th><th>Script</th><th>Result</th></tr></thead><tbody>{history_rows or '<tr><td colspan="5">No Flyway history.</td></tr>'}</tbody></table></div>
+          <div class="subheading"><h3>{_e(message("report.base_tables", language))}</h3><span>{_e(message("report.table_columns", language, tables=len(tables), columns=len(columns)))}</span></div>
+          <div class="tag-list">{table_names or f'<span class="empty-note">{_e(message("report.no_tables", language))}</span>'}</div>
+          <div class="subheading"><h3>{_e(message("report.flyway_runtime_history", language))}</h3><span>{_e(message("report.rows", language, count=len(history)))}</span></div>
+          <div class="table-wrap"><table><thead><tr><th>{_e(message("report.rank", language))}</th><th>{_e(message("report.version", language))}</th><th>{_e(message("report.description", language))}</th><th>{_e(message("report.script", language))}</th><th>{_e(message("report.result", language))}</th></tr></thead><tbody>{history_rows or f'<tr><td colspan="5">{_e(message("report.no_flyway_history", language))}</td></tr>'}</tbody></table></div>
         </section>
         """
 
     def _render_ledger(self, data: _ReportData) -> str:
+        language = data.language
         evidence_by_id = {item.id: item for item in data.static_result.evidence}
         facts = [("static_scan", fact) for fact in sorted(data.static_result.facts, key=lambda fact: fact.id)]
         if data.runtime_result is not None:
             facts.extend(("mysql_verification", fact) for fact in sorted(data.runtime_result.facts, key=lambda fact: fact.id))
             evidence_by_id.update({item.id: item for item in data.runtime_result.evidence})
-        blocks = "".join(self._render_fact_ledger(artifact, fact, evidence_by_id) for artifact, fact in facts)
+        blocks = "".join(
+            self._render_fact_ledger(artifact, fact, evidence_by_id, language)
+            for artifact, fact in facts
+        )
         return f"""
         <section class="section" id="ledger">
-          <div class="section-heading"><div><p class="eyebrow">EVIDENCE DRILL-DOWN</p><h2>Fact and evidence ledger</h2></div><span class="section-index">08</span></div>
-          <p class="section-note">Open a fact to inspect its status, structured value, evidence IDs, and the raw observations behind it.</p>
-          <div class="ledger">{blocks or '<p class="empty-note">No facts available.</p>'}</div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.ledger.eyebrow", language))}</p><h2>{_e(message("report.ledger.title", language))}</h2></div><span class="section-index">08</span></div>
+          <p class="section-note">{_e(message("report.ledger.note", language))}</p>
+          <div class="ledger">{blocks or f'<p class="empty-note">{_e(message("report.no_facts", language))}</p>'}</div>
         </section>
         """
 
     @staticmethod
-    def _render_fact_ledger(artifact: str, fact: Fact, evidence_by_id: Mapping[str, Evidence]) -> str:
+    def _render_fact_ledger(
+        artifact: str,
+        fact: Fact,
+        evidence_by_id: Mapping[str, Evidence],
+        language: Language,
+    ) -> str:
         evidence_blocks = []
         for evidence_id in sorted(fact.evidence_ids):
             evidence = evidence_by_id.get(evidence_id)
             if evidence is None:
-                evidence_blocks.append(f"<li><code>{_e(evidence_id)}</code><span>Not available</span></li>")
+                evidence_blocks.append(
+                    f'<li><code>{_e(evidence_id)}</code><span>{_e(message("report.not_available", language))}</span></li>'
+                )
                 continue
             evidence_blocks.append(
-                f'<li><details><summary><code>{_e(evidence.id)}</code> <span>{_e(evidence.kind)}</span></summary><div class="evidence-detail"><p><span class="label">Source</span> {_e(evidence.source)}</p>{_json_block(evidence.value)}</div></details></li>'
+                f'<li><details><summary><code>{_e(evidence.id)}</code> <span>{_e(evidence.kind)}</span></summary><div class="evidence-detail"><p><span class="label">{_e(message("report.source", language))}</span> {_e(evidence.source)}</p>{_json_block(evidence.value)}</div></details></li>'
             )
         return f"""
         <details class="fact-row">
-          <summary><span class="status-dot status-{_e(fact.status)}"></span><span class="status-pill">{_e(fact.status)}</span><code>{_e(fact.id)}</code><span>{_e(fact.name)}</span><em>{_e(artifact)}</em></summary>
-          <div class="fact-detail"><div class="detail-grid"><div><span class="label">Fact ID</span><code>{_e(fact.id)}</code></div><div><span class="label">Status</span><span class="status-pill">{_e(fact.status)}</span></div><div><span class="label">Structured value</span>{_json_block(fact.value)}</div><div><span class="label">Evidence IDs</span><ul class="plain-list">{"".join(evidence_blocks) or '<li>Not available</li>'}</ul></div></div></div>
+          <summary><span class="status-dot status-{_e(fact.status)}"></span><span class="status-pill">{_e(status_label(fact.status, language))}</span><code>{_e(fact.id)}</code><span>{_e(fact.name)}</span><em>{_e(artifact)}</em></summary>
+          <div class="fact-detail"><div class="detail-grid"><div><span class="label">{_e(message("report.fact_id", language))}</span><code>{_e(fact.id)}</code></div><div><span class="label">{_e(message("report.status", language))}</span><span class="status-pill">{_e(status_label(fact.status, language))}</span></div><div><span class="label">{_e(message("report.structured_value", language))}</span>{_json_block(fact.value)}</div><div><span class="label">{_e(message("report.evidence_ids", language))}</span><ul class="plain-list">{"".join(evidence_blocks) or f'<li>{_e(message("report.not_available", language))}</li>'}</ul></div></div></div>
         </details>
         """
 
     def _render_provenance(self, data: _ReportData) -> str:
+        language = data.language
         artifacts = (data.static, data.runtime, data.reconciliation)
         rows = []
         for artifact in artifacts:
             if artifact.sha256:
-                times = " · ".join(f"{_e(label)}: {_e(value)}" for label, value in artifact.time_labels) or "Not available"
+                times = " · ".join(
+                    f"{_e(_time_label(label, language))}: {_e(value)}"
+                    for label, value in artifact.time_labels
+                ) or _e(message("report.not_available", language))
                 rows.append(
                     f'<tr><td><code>{_e(artifact.relative_path)}</code></td><td>{_e(artifact.artifact)}</td><td><code>{_e(artifact.schema_version)}</code></td><td><code>{_e(artifact.sha256)}</code></td><td>{times}</td></tr>'
                 )
             else:
                 rows.append(
-                    f'<tr><td><code>{_e(artifact.relative_path)}</code></td><td>{_e(artifact.artifact)}</td><td colspan="3"><span class="unavailable">Not available</span></td></tr>'
+                    f'<tr><td><code>{_e(artifact.relative_path)}</code></td><td>{_e(artifact.artifact)}</td><td colspan="3"><span class="unavailable">{_e(message("report.not_available", language))}</span></td></tr>'
                 )
         return f"""
         <section class="section" id="provenance">
-          <div class="section-heading"><div><p class="eyebrow">PROVENANCE</p><h2>Artifact provenance / Report inputs</h2></div><span class="section-index">09</span></div>
-          <p class="section-note">The report is a view of these snapshots. Their paths and SHA-256 digests identify exactly what was read.</p>
-          <div class="table-wrap"><table><thead><tr><th>Path</th><th>Artifact</th><th>Schema</th><th>SHA-256</th><th>Snapshot time</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.provenance.eyebrow", language))}</p><h2>{_e(message("report.provenance.title", language))}</h2></div><span class="section-index">09</span></div>
+          <p class="section-note">{_e(message("report.provenance.note", language))}</p>
+          <div class="table-wrap"><table><thead><tr><th>{_e(message("report.path", language))}</th><th>{_e(message("report.artifact", language))}</th><th>{_e(message("report.schema", language))}</th><th>{_e(message("report.sha256", language))}</th><th>{_e(message("report.snapshot_time", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
         </section>
         """
 
     @staticmethod
-    def _unavailable_section(section_id: str, index: str, eyebrow: str, title: str, note: str) -> str:
+    def _unavailable_section(
+        section_id: str,
+        index: str,
+        eyebrow: str,
+        title: str,
+        note: str,
+        *,
+        language: Language,
+    ) -> str:
         return f"""
         <section class="section unavailable-section" id="{section_id}">
           <div class="section-heading"><div><p class="eyebrow">{_e(eyebrow)}</p><h2>{_e(title)}</h2></div><span class="section-index">{_e(index)}</span></div>
@@ -674,6 +786,18 @@ def _artifact_times(parsed: object) -> tuple[tuple[str, str], ...]:
     return tuple(values)
 
 
+def _time_label(label: str, language: Language) -> str:
+    if label == "Observed":
+        return message("report.observed_label", language)
+    return message(f"report.{label.lower()}", language)
+
+
+def _artifact_note(artifact: _Artifact, language: Language) -> str:
+    if artifact.error_key is not None:
+        return message(artifact.error_key, language)
+    return artifact.error or message("report.not_available", language)
+
+
 def _e(value: object) -> str:
     sanitized = _sanitize(value)
     if sanitized is None:
@@ -685,8 +809,12 @@ def _e(value: object) -> str:
     return escape(text, quote=True)
 
 
-def _display(value: object) -> str:
-    return _e("Not available" if value is None or value == "" else value)
+def _display(value: object, language: Language = "en") -> str:
+    return _e(
+        message("report.not_available", language)
+        if value is None or value == ""
+        else value
+    )
 
 
 def _sanitize(value: object) -> object:

@@ -47,7 +47,7 @@ dev = [
 ]
 
 [project.scripts]
-repoevidence = "repoevidence.cli:app"
+repoevidence = "repoevidence.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
