@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from repoevidence import __version__
 from repoevidence.collectors.base import Collector
 from repoevidence.models import CollectorResult, Conflict, Evidence, Fact
 from repoevidence.registry import CollectorRegistry
@@ -60,7 +61,7 @@ def test_scanner_adds_scan_metadata_with_utc_timestamps(tmp_path: Path) -> None:
     result = Scanner.default().scan(tmp_path)
 
     assert result.schema_version == "0.1"
-    assert result.metadata.tool_version == "0.1.0"
+    assert result.metadata.tool_version == __version__
     assert result.metadata.started_at.utcoffset().total_seconds() == 0
     assert result.metadata.finished_at.utcoffset().total_seconds() == 0
     assert result.metadata.finished_at >= result.metadata.started_at

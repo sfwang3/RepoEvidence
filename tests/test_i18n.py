@@ -7,6 +7,7 @@ import locale
 import pytest
 
 from repoevidence.i18n import (
+    _CATALOGS,
     SUPPORTED_LANGUAGES,
     InvalidLanguageError,
     finding_label,
@@ -15,6 +16,19 @@ from repoevidence.i18n import (
     resolve_language,
     status_label,
 )
+
+
+def test_english_and_chinese_catalogs_have_identical_keys() -> None:
+    assert set(_CATALOGS["en"]) == set(_CATALOGS["zh-CN"])
+
+
+def test_first_layer_report_language_describes_user_tasks() -> None:
+    assert message("report.conclusion.source_only.title", "en") == (
+        "Source inspection is complete"
+    )
+    assert message("report.conclusion.source_only.title", "zh-CN") == "已完成源码检查"
+    assert "Evidence" not in message("report.conclusion.source_only.body", "en")
+    assert "Fact" not in message("report.conclusion.source_only.body", "en")
 
 
 def test_supported_languages_are_exactly_english_and_simplified_chinese() -> None:
@@ -29,6 +43,21 @@ def test_explicit_language_wins_over_environment_and_locale() -> None:
 def test_environment_language_wins_over_system_locale() -> None:
     assert resolve_language("auto", environ={"REPOEVIDENCE_LANG": "zh-CN"}, locale_values=["en_US"]) == "zh-CN"
     assert resolve_language("auto", environ={"REPOEVIDENCE_LANG": "en"}, locale_values=["zh_CN"]) == "en"
+
+
+def test_user_config_language_wins_over_system_locale_but_not_environment() -> None:
+    assert resolve_language(
+        "auto",
+        environ={},
+        user_language="zh-CN",
+        locale_values=["en_US"],
+    ) == "zh-CN"
+    assert resolve_language(
+        "auto",
+        environ={"REPOEVIDENCE_LANG": "en"},
+        user_language="zh-CN",
+        locale_values=["zh_CN"],
+    ) == "en"
 
 
 @pytest.mark.parametrize("locale_value", ["zh_CN", "zh-CN", "Chinese (Simplified)_China.utf8"])
@@ -66,6 +95,15 @@ def test_catalog_and_canonical_labels_preserve_machine_values() -> None:
     assert finding_label("runtime_only", "zh-CN") == "仅存在于运行环境（runtime_only）"
     assert status_label("verified", "en") == "verified"
     assert finding_label("runtime_only", "en") == "runtime_only"
+
+
+def test_inspect_completion_message_is_available_in_both_languages() -> None:
+    assert message("cli.inspect.complete", "en", path="/tmp/report") == (
+        "Inspect complete. Report written to /tmp/report"
+    )
+    assert message("cli.inspect.complete", "zh-CN", path="/tmp/report") == (
+        "检查完成。报告已生成：/tmp/report"
+    )
 
 
 def test_report_not_available_and_mysql_error_are_natural_in_chinese() -> None:

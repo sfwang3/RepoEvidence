@@ -2,74 +2,99 @@
 
 English | [简体中文](README.zh-CN.md)
 
-## Why RepoEvidence
+## What RepoEvidence is
 
-RepoEvidence is a deterministic, LLM-free engine for understanding software repositories with evidence you can inspect and verify.
+RepoEvidence is a local-first, evidence-backed repository understanding and
+runtime verification tool. It helps you inspect what source code declares,
+verify MySQL runtime metadata only after you explicitly ask, compare source
+migrations with runtime history, trace conclusions back to Evidence, and
+generate an offline HTML Report.
 
-## Core Evidence / Fact model
-
-It separates what a repository declares from what runtime verification observes:
+The analysis is deterministic and does not execute the target repository. It
+keeps source declarations and runtime observations separate, so a conclusion
+can be read together with its evidence, status, snapshot, and limits.
 
 ```text
-repository → collectors → Evidence / Fact → JSON
-                                      ↘ Verification / Reconciliation
+repository → source inspection → Evidence / Fact → report
+                              ↘ runtime verification / reconciliation
 ```
-
-Evidence preserves the original observation. A Fact is a structured interpretation with an explicit status: `declared`, `inferred`, `verified`, or `conflicted`. Runtime verification is opt-in, and reconciliation reports cross-artifact drift without pretending that static source evidence and runtime observations are the same thing.
 
 ## Quick Start
 
-Requires Python 3.12 or newer.
+RepoEvidence requires Python 3.12 or newer. For a normal human-first
+workflow:
 
 ```bash
-python -m pip install repoevidence
+pipx install repoevidence
 
-repoevidence scan /path/to/repository
-repoevidence report /path/to/repository
+cd your-project
+repoevidence
 ```
 
-The scan writes `.repoevidence/evidence.json`. The report writes a self-contained HTML file to `.repoevidence/report/index.html`; open it directly in a browser. Report generation does not start a server, install frontend dependencies, access the network, or execute the target repository.
+In a suitable interactive TTY, RepoEvidence opens a local Interactive
+Workspace. You can inspect source, explicitly verify MySQL when needed,
+compare source and runtime evidence, and open the complete report.
 
-### Language and human-facing output
-
-RepoEvidence supports English (`en`) and Simplified Chinese (`zh-CN`) for human-facing help, CLI messages, and HTML reports:
+The equivalent explicit entry point is:
 
 ```bash
-repoevidence --lang zh-CN scan /path/to/repository
-repoevidence --lang zh-CN --help
+repoevidence workspace .
 ```
 
-The global option is `--lang auto|en|zh-CN`, and the default is `auto`. Resolution order is CLI `--lang`, `REPOEVIDENCE_LANG`, system locale, then English fallback. A clear Chinese system locale such as `zh_CN`, `zh-CN`, or `Chinese` selects `zh-CN`. Invalid locale detection never makes the CLI fail; an invalid explicit language is reported clearly.
+Starting the Workspace does not scan source, run the target project, connect
+to MySQL, or modify a database. Startup only reads project identity, Git
+metadata, existing RepoEvidence artifacts, user settings, and terminal
+capabilities.
 
-Localization changes only human-facing presentation. Command names, option names, environment variable names, JSON keys, schema versions, IDs, status values, reconciliation kinds, and error codes remain stable English machine-facing contracts. Raw repository paths, endpoints, source names, migration filenames, and artifact values are preserved as observed.
+## Interactive Workspace
 
-## CLI
+The Workspace is for people using RepoEvidence day to day. It presents the
+current project state and the next safe action instead of requiring you to
+remember a command sequence.
 
-### Static scan
+| Area | What it shows |
+| --- | --- |
+| Project identity | Repository name, location, Git branch/commit, and known project context. |
+| Source | Whether source inspection has been performed, what snapshot it covers, and what it found. |
+| MySQL Runtime | Whether explicit runtime metadata verification is available, current, stale, uncertain, or failed. |
+| Comparison | Whether source/runtime evidence can be reconciled and what differences are known. |
+| Report | Whether the offline report is present, fresh, stale, or needs a language/report refresh. |
 
-```bash
-repoevidence scan /path/to/repository
-```
+Select a ledger item to read its human explanation, technical details, and
+contextual actions. Actions change with the state: inspect source, verify
+MySQL after an effect preview, reconcile existing artifacts offline, refresh
+the report, or open the report. The Workspace does not silently perform an
+upstream operation just because an artifact is missing or old.
 
-The default static collectors inspect repository metadata, Spring MVC annotations, Maven declarations, and Flyway migration files. The scan does not run Maven, Flyway, SQL, tests, or target-repository code.
+Settings provides immediate English / 简体中文 switching, theme and
+interaction preferences, and reduced-motion behavior. A language preference
+can be persisted for later sessions. Recent activity shows the result of
+operations and failures so that recovery remains visible. Help and keyboard
+shortcuts are available in the Workspace, but the visible ledger and actions
+are the primary interface.
 
-### Offline HTML Report
+## What RepoEvidence checks
 
-```bash
-repoevidence report /path/to/repository
-```
+Source inspection reads repository metadata, common project files, Spring MVC
+declarations, Maven project declarations, and Flyway migration files. It does
+not run Maven, Flyway, SQL, tests, or code from the target repository.
 
-The report reads the existing static scan and, when present, MySQL verification and reconciliation artifacts. Missing optional artifacts are shown as `Not available`; the command never runs those upstream operations automatically.
+When explicitly requested, MySQL verification reads runtime schema metadata,
+schema summaries, indexes, constraints, and Flyway history. It does not read
+business rows. Reconciliation currently compares the source Flyway evidence
+with the runtime Flyway history; it is not a claim about the overall health of
+the project.
 
-The report language follows the selected language. English reports use `<html lang="en">`; Chinese reports use `<html lang="zh-CN">` and display statuses such as `已验证（verified）` while preserving the canonical artifact value `verified`.
+## Runtime verification safety
 
-### Explicit MySQL verification
+MySQL verification is an explicit opt-in operation. It happens only after a
+user action, using environment configuration and fixed read-only metadata
+queries. The Workspace shows an effect preview before the connection is made.
+RepoEvidence does not modify the database and does not store database
+credentials in its user settings.
 
-```bash
-repoevidence verify mysql /path/to/repository
-```
-
-This is the only command that connects to MySQL. Connection settings are read from environment variables, never from CLI arguments:
+Configure a least-privilege account through these environment variables; do
+not put a real password in a command example or source file:
 
 ```text
 REPOEVIDENCE_MYSQL_HOST
@@ -79,67 +104,182 @@ REPOEVIDENCE_MYSQL_PASSWORD
 REPOEVIDENCE_MYSQL_DATABASE
 ```
 
-The verifier runs fixed read-only metadata queries and writes `.repoevidence/verification/mysql.json`. Use a dedicated database account with only the `SELECT` permissions required by those metadata queries. No business table rows are collected.
+Only `repoevidence verify mysql .` and its corresponding Workspace action
+connect to MySQL. Source inspection, report generation, and reconciliation
+remain offline.
 
-### Offline Flyway reconciliation
+## One-shot CLI and automation
 
-```bash
-repoevidence reconcile /path/to/repository
-```
+One-shot commands do not enter the TUI. They are the stable entry points for
+automation, CI, scripts, agents, and advanced users:
 
-Reconciliation reads `.repoevidence/evidence.json` and `.repoevidence/verification/mysql.json` only. It does not connect to MySQL or execute repository code. The result is `.repoevidence/reconciliation.json` and currently covers Flyway `matched`, `runtime_only`, `source_only`, `version_mismatch`, `runtime_failed`, `ambiguous`, and baseline handling.
+| Command | Meaning |
+| --- | --- |
+| `repoevidence inspect .` | Safe source inspection plus report generation. |
+| `repoevidence scan .` | Source-only machine artifact generation. |
+| `repoevidence verify mysql .` | Explicit runtime metadata verification. |
+| `repoevidence reconcile .` | Offline source/runtime comparison. |
+| `repoevidence report .` | Generate or refresh the offline HTML report from existing artifacts. |
 
-## ChargeSafe drift example
+`inspect` is the convenient one-shot path when you want a source snapshot and
+the report together. `scan`, `verify`, `reconcile`, and `report` remain
+separate so an automation pipeline can choose exactly which operation is
+allowed.
 
-ChargeSafe was used as a real acceptance case, but it is not required to use RepoEvidence and is not bundled with the package. The evidence showed a repository/runtime Flyway drift:
+## HTML Report
+
+The HTML Report is offline and self-contained. It puts the human conclusion
+first, then provides coverage, freshness, limits, next actions, technical
+findings, and audit traceability across source, Maven, Spring, Flyway, MySQL,
+and reconciliation evidence. Fact and Evidence links preserve the path from
+an interpretation back to the observed value, and provenance records which
+artifacts the report consumed.
+
+The Workspace is for current state, actions, and recovery. The HTML Report is
+for complete reading, technical evidence, and an audit trail. Report
+generation never starts a server, accesses the network, or runs upstream
+operations automatically.
+
+## Machine-readable artifacts
+
+RepoEvidence writes these local artifacts when their operations are run:
 
 ```text
-Repository Flyway: V1-V6
-Runtime:           Baseline 0 + V1-V9
-matched:           6
-runtime-only:      V7/V8/V9
-drift_detected:    true
+.repoevidence/evidence.json
+.repoevidence/verification/mysql.json
+.repoevidence/reconciliation.json
+.repoevidence/report/index.html
+.repoevidence/report/manifest.json
 ```
 
-The generated reconciliation kept the runtime references for V7, V8, and V9, did not invent source references, and renders the outcome as `DRIFT DETECTED` in the HTML report. No database credentials or connection configuration are part of this example.
+`evidence.json` is the source inspection artifact. `mysql.json` contains the
+explicit runtime verification result, and `reconciliation.json` contains the
+offline comparison result. `index.html` is the human report. The report
+`manifest.json` records report provenance and freshness inputs; it is not a
+replacement for the Evidence machine schema.
 
-## Current coverage
+## Status confidence and snapshots
 
-- Repository metadata: Git commit/branch and common project files.
-- Spring API: statically inferred `@RestController` endpoints from Java source.
-- Maven: declared projects, modules, parent, properties, dependencies, dependency management, and plugins. No Effective POM or dependency resolution is claimed.
-- Flyway: declared versioned/repeatable migration files, ordering, and source file SHA-256. SQL is not executed.
-- MySQL: explicitly requested runtime metadata, schema summaries, indexes, constraints, and Flyway history.
-- Evidence-backed reconciliation: Flyway drift across static and runtime artifacts.
-- Offline HTML report: overview, status counts, domain sections, drift findings, fact/evidence drill-down, and artifact provenance.
+RepoEvidence distinguishes between:
 
-## Security model
+- not yet checked;
+- checked for a known snapshot;
+- changed or stale since that snapshot;
+- unable to confirm freshness; and
+- an operation failure.
 
-RepoEvidence treats repositories, databases, and artifact contents as untrusted input.
+An existing artifact does not necessarily describe the current source tree.
+Runtime verification is a snapshot of metadata, not live database monitoring.
+Comparison reports only the source/runtime evidence differences that
+RepoEvidence currently supports; it should not be read as an overall project
+health score.
 
-- Static scan, report, and reconciliation do not execute target code.
-- Report and reconciliation are offline operations.
-- MySQL verification is explicit opt-in and uses fixed read-only queries.
-- Passwords are not accepted as CLI arguments and secrets are not intended to enter artifacts or reports.
-- Report HTML escapes artifact-derived text and redacts secret-like structured fields.
-- Evidence and Fact references are stable and inspectable; uncertainty is not fabricated into a Fact.
+## `--plain`, non-TTY, and CI
 
-## Limitations
+In an interactive TTY, bare `repoevidence` enters the Workspace. When stdin or
+stdout is redirected, piped, used by CI, paired with `TERM=dumb`, or otherwise
+non-interactive, bare `repoevidence` does not start the full-screen TUI. It
+uses the non-blocking plain welcome path and exits instead of waiting for
+input.
 
-RepoEvidence does not currently provide runtime Spring endpoint verification, DTO/entity analysis, Swagger/OpenAPI generation, SQL schema interpretation, Maven execution, dependency resolution, business-row inspection, automatic repair, risk scoring, LLM features, PDF/DOCX export, or a web service.
+Use `--plain` when you want to select plain behavior explicitly:
+
+```bash
+repoevidence --plain
+repoevidence --plain workspace .
+```
+
+All one-shot commands are plain command-line operations regardless of whether
+the terminal is interactive, so a CI job will not unexpectedly switch to a
+full-screen UI.
+
+## Language
+
+In the Workspace, open Settings to switch between English and Simplified
+Chinese immediately. The selected preference can be persisted for future
+sessions.
+
+For one-shot commands and automation, use:
+
+```bash
+repoevidence --lang en inspect .
+repoevidence --lang zh-CN inspect .
+```
+
+Language resolution follows this order:
+
+```text
+--lang
+> REPOEVIDENCE_LANG
+> user config
+> system locale
+> English fallback
+```
+
+The user configuration is stored in the platform-standard location selected
+by `platformdirs`; its path is not tied to WSL. Command names, option names,
+environment variable names, JSON keys, schema versions, IDs, status values,
+reconciliation kinds, and error codes remain stable English machine-facing
+contracts.
+
+## Installation and supported environments
+
+`pipx` is convenient for an isolated command-line installation:
+
+```bash
+pipx install repoevidence
+```
+
+The package also supports a normal virtual environment:
+
+```bash
+python -m pip install repoevidence
+```
+
+Runtime dependencies are declared directly by the package, including Textual,
+platformdirs, Rich, and the existing evidence/runtime dependencies. A fresh
+wheel therefore includes the Interactive Workspace, localization resources,
+report code, and runtime source without relying on development-only
+transitive dependencies.
+
+RepoEvidence is designed for Linux, macOS, Windows, and WSL. Current
+interactive release validation has been performed primarily on Linux/WSL;
+native Windows and macOS should not be interpreted as fully manually tested
+by this release.
+
+## Release validation limits
+
+- v0.2.0 interactive release validation was performed primarily on Linux/WSL;
+  native Windows/macOS interactive manual validation remains pending.
+- A real MySQL successful interactive end-to-end journey was not completed
+  before this release. Fixture, headless, failure-recovery, and machine
+  contract tests cover the current path.
+
+## Security and trust model
+
+Repositories, databases, and stored artifacts are treated as untrusted input.
+Static inspection, report generation, and reconciliation do not execute target
+code. Report HTML escapes artifact-derived text and redacts secret-like
+structured fields. Passwords are not accepted as CLI arguments, and secrets
+are not intended to enter artifacts or reports.
+
+RepoEvidence is not an AI assistant, health scanner, automatic fixer, or
+database monitoring service. It records what was observed, what was inferred,
+what was explicitly verified, and what could not be confirmed.
 
 ## Development
 
 ```bash
 python -m pip install -e '.[dev]'
-pytest
+pytest -q
 ruff check .
 python -m build
 python -m twine check dist/*
 ```
 
-The package declares Python `>=3.12`. CI runs the test suite, linter, distribution build, and distribution metadata checks without requiring a live database.
+The package requires Python `>=3.12`. CI runs tests, Ruff, distribution
+builds, and distribution metadata checks without requiring a live database.
 
-## Apache-2.0 License
+## License
 
 RepoEvidence is licensed under the Apache License 2.0.

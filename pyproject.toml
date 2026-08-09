@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repoevidence"
-version = "0.1.0"
-description = "Evidence-backed software understanding and verification for repositories."
+version = "0.2.0"
+description = "Local-first, evidence-backed repository understanding and runtime verification."
 readme = "README.pypi.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -29,7 +29,10 @@ dependencies = [
     "tree-sitter>=0.25",
     "tree-sitter-java>=0.23",
     "typer>=0.12",
+    "rich>=13.7",
     "mysql-connector-python>=9.0",
+    "textual>=8.2,<9",
+    "platformdirs>=4,<5",
 ]
 
 [project.urls]

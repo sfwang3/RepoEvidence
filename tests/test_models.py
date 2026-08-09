@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
+from repoevidence import __version__
 from repoevidence.models import (
     CollectorResult,
     Conflict,
@@ -58,14 +59,14 @@ def test_scan_result_contains_versioned_utc_scan_metadata() -> None:
     result = ScanResult(
         repository_root="/repo",
         metadata=ScanMetadata(
-            tool_version="0.1.0",
+            tool_version=__version__,
             started_at=started_at,
             finished_at=finished_at,
         ),
     )
 
     assert result.schema_version == "0.1"
-    assert result.metadata.tool_version == "0.1.0"
+    assert result.metadata.tool_version == __version__
     assert result.metadata.started_at.tzinfo is not None
     assert result.metadata.started_at.utcoffset().total_seconds() == 0
     assert result.metadata.finished_at.utcoffset().total_seconds() == 0
@@ -73,7 +74,7 @@ def test_scan_result_contains_versioned_utc_scan_metadata() -> None:
 
 def test_scan_result_rejects_duplicate_and_dangling_references() -> None:
     metadata = ScanMetadata(
-        tool_version="0.1.0",
+        tool_version=__version__,
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
     )
@@ -138,7 +139,7 @@ def test_verification_result_has_safe_structured_errors_and_reference_integrity(
         verifier="mysql",
         repository_root="/repo",
         metadata=VerificationMetadata(
-            tool_version="0.1.0",
+            tool_version=__version__,
             started_at=started_at,
             finished_at=finished_at,
             observed_at=finished_at,

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from repoevidence import __version__
 from repoevidence.cli import app
 from repoevidence.reporting import ReportGenerationError, ReportGenerator
 
@@ -273,7 +275,7 @@ def static_payload(root: Path, *, malicious: bool = False) -> dict[str, object]:
         "schema_version": "0.1",
         "repository_root": str(root),
         "metadata": {
-            "tool_version": "0.1.0",
+            "tool_version": __version__,
             "started_at": "2026-08-09T00:00:00Z",
             "finished_at": "2026-08-09T00:00:01Z",
         },
@@ -476,7 +478,7 @@ def runtime_payload(root: Path, *, include_secret: bool = False) -> dict[str, ob
         "verifier": "mysql",
         "repository_root": str(root),
         "metadata": {
-            "tool_version": "0.1.0",
+            "tool_version": __version__,
             "started_at": "2026-08-09T00:01:00Z",
             "finished_at": "2026-08-09T00:01:01Z",
             "observed_at": "2026-08-09T00:01:00Z",
@@ -489,13 +491,18 @@ def runtime_payload(root: Path, *, include_secret: bool = False) -> dict[str, ob
     }
 
 
-def reconciliation_payload(root: Path) -> dict[str, object]:
+def reconciliation_payload(
+    root: Path,
+    *,
+    static_sha256: str = "a" * 64,
+    runtime_sha256: str = "b" * 64,
+) -> dict[str, object]:
     return {
         "schema_version": "0.1",
         "repository_root": str(root),
         "inputs": [
-            {"artifact": "static_scan", "relative_path": ".repoevidence/evidence.json", "sha256": "a" * 64},
-            {"artifact": "mysql_verification", "relative_path": ".repoevidence/verification/mysql.json", "sha256": "b" * 64},
+            {"artifact": "static_scan", "relative_path": ".repoevidence/evidence.json", "sha256": static_sha256},
+            {"artifact": "mysql_verification", "relative_path": ".repoevidence/verification/mysql.json", "sha256": runtime_sha256},
         ],
         "summary": {
             "repository_versioned": 1,
@@ -571,6 +578,7 @@ def write_artifacts(
     static_bytes = (json.dumps(static_payload(root.resolve(), malicious=malicious), indent=2) + "\n").encode()
     (artifact_dir / "evidence.json").write_bytes(static_bytes)
     paths["static"] = static_bytes
+    runtime_bytes = b""
     if include_runtime:
         runtime_dir = artifact_dir / "verification"
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -578,7 +586,17 @@ def write_artifacts(
         (runtime_dir / "mysql.json").write_bytes(runtime_bytes)
         paths["runtime"] = runtime_bytes
     if include_reconciliation:
-        recon_bytes = (json.dumps(reconciliation_payload(root.resolve()), indent=2) + "\n").encode()
+        recon_bytes = (
+            json.dumps(
+                reconciliation_payload(
+                    root.resolve(),
+                    static_sha256=hashlib.sha256(static_bytes).hexdigest(),
+                    runtime_sha256=hashlib.sha256(runtime_bytes).hexdigest(),
+                ),
+                indent=2,
+            )
+            + "\n"
+        ).encode()
         (artifact_dir / "reconciliation.json").write_bytes(recon_bytes)
         paths["reconciliation"] = recon_bytes
     return paths
@@ -835,6 +853,15 @@ def test_fact_evidence_drilldown_contains_structured_values_and_references(tmp_p
     for fact in reconciliation_payload(tmp_path.resolve())["findings"]:
         for reference in fact["references"]:
             assert reference["id"] in html
+
+
+def test_report_ids_are_unique_and_internal_trace_links_resolve(tmp_path: Path) -> None:
+    html = generate(tmp_path)
+    ids = re.findall(r'\sid="([^"]+)"', html)
+    internal_links = re.findall(r'href="#([^"]+)"', html)
+
+    assert len(ids) == len(set(ids))
+    assert set(internal_links) <= set(ids)
 
 
 def test_html_escapes_untrusted_values_and_redacts_secret_like_values(tmp_path: Path) -> None:

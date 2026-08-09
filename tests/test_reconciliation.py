@@ -6,6 +6,7 @@ from urllib.parse import quote
 import pytest
 from typer.testing import CliRunner
 
+from repoevidence import __version__
 from repoevidence.cli import app
 from repoevidence.reconciliation import Reconciler
 
@@ -75,7 +76,7 @@ def static_payload(
         "schema_version": schema_version,
         "repository_root": str(root),
         "metadata": {
-            "tool_version": "0.1.0",
+            "tool_version": __version__,
             "started_at": "2026-08-08T00:00:00Z",
             "finished_at": "2026-08-08T00:00:01Z",
         },
@@ -121,7 +122,7 @@ def runtime_payload(
         "verifier": "mysql",
         "repository_root": str(root),
         "metadata": {
-            "tool_version": "0.1.0",
+            "tool_version": __version__,
             "started_at": "2026-08-08T00:00:00Z",
             "finished_at": "2026-08-08T00:00:01Z",
             "observed_at": "2026-08-08T00:00:00Z",

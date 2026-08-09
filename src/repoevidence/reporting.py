@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
@@ -13,7 +14,8 @@ from typing import Any, Mapping
 
 from pydantic import ValidationError
 
-from repoevidence import __version__
+from repoevidence.artifact_io import atomic_write_text
+from repoevidence.assessment import CheckAssessment, CheckState, assess_repository
 from repoevidence.i18n import (
     Language,
     finding_label,
@@ -28,6 +30,16 @@ from repoevidence.models import (
     ReconciliationResult,
     ScanResult,
     VerificationResult,
+)
+from repoevidence.report_html import ReportHtmlRenderer
+from repoevidence.report_manifest import (
+    build_report_manifest,
+    write_report_manifest,
+)
+from repoevidence.report_view import (
+    AttentionItem,
+    ReportViewModel,
+    ReportViewModelBuilder,
 )
 
 SUPPORTED_SCHEMA_VERSION = "0.1"
@@ -81,6 +93,7 @@ class _ReportData:
     reconciliation_result: ReconciliationResult | None
     generated_at: datetime
     language: Language
+    view: ReportViewModel
 
 
 class ReportGenerator:
@@ -95,8 +108,14 @@ class ReportGenerator:
         root = Path(repo_path).expanduser().resolve()
         data = self._load(root, generated_at, resolve_language(language))
         output_path = root / REPORT_RELATIVE_PATH
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(self._render(data), encoding="utf-8")
+        atomic_write_text(output_path, self._render(data))
+        manifest = build_report_manifest(
+            root,
+            generated_at=data.generated_at,
+            language=data.language,
+            output_path=output_path,
+        )
+        write_report_manifest(root, manifest)
         return output_path
 
     def _load(
@@ -129,6 +148,12 @@ class ReportGenerator:
         if timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=timezone.utc)
         timestamp = timestamp.astimezone(timezone.utc)
+        assessment = assess_repository(root)
+        view = ReportViewModelBuilder().build(
+            assessment,
+            generated_at=timestamp,
+            language=language,
+        )
         return _ReportData(
             root=static.parsed.repository_root,
             static=static,
@@ -145,6 +170,7 @@ class ReportGenerator:
             ),
             generated_at=timestamp,
             language=language,
+            view=view,
         )
 
     @staticmethod
@@ -263,105 +289,174 @@ class ReportGenerator:
         )
 
     def _render(self, data: _ReportData) -> str:
-        language = data.language
         sections = [
+            self._render_summary(data),
+            self._render_coverage(data),
+            self._render_attention(data),
             self._render_overview(data),
-            self._render_status(data),
             self._render_reconciliation(data),
             self._render_spring(data),
             self._render_maven(data),
             self._render_flyway(data),
             self._render_mysql(data),
+            self._render_status(data),
             self._render_ledger(data),
             self._render_provenance(data),
         ]
         body = "\n".join(sections)
-        generated = _e(data.generated_at.isoformat())
-        repository_name = Path(data.root).name or data.root
-        return f"""<!doctype html>
-<html lang="{_e(language)}">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{_e(message("report.title", language, name=repository_name))}</title>
-  <style>{_CSS}</style>
-</head>
-<body>
-  <a class="skip-link" href="#main">{_e(message("report.skip_link", language))}</a>
-  <header class="hero">
-    <div class="hero-grid">
-      <div>
-        <p class="eyebrow">{_e(message("report.hero.eyebrow", language))}</p>
-        <h1>{_e(message("report.hero.title", language))}</h1>
-        <p class="hero-copy">{_e(message("report.hero.copy", language))}</p>
-      </div>
-      <div class="hero-stamp" aria-label="{_e(message("report.generated_aria", language))}">
-        <span>{_e(message("report.generated", language))}</span>
-        <strong>{generated}</strong>
-        <small>{_e(message("report.tool_version", language, version=__version__))}</small>
-      </div>
-    </div>
-  </header>
-  <main id="main" class="shell">
-    {body}
-  </main>
-  <footer class="footer">{_e(message("report.footer", language))}</footer>
-  <script>{_JS}</script>
-</body>
-</html>
-"""
+        return ReportHtmlRenderer().render(data.view, body)
+
+    def _render_summary(self, data: _ReportData) -> str:
+        view = data.view
+        language = data.language
+        conclusion = view.conclusion
+        title = message(
+            f"report.conclusion.{conclusion.kind.value}.title",
+            language,
+            count=conclusion.drift_count,
+        )
+        body = message(
+            f"report.conclusion.{conclusion.kind.value}.body",
+            language,
+            count=conclusion.drift_count,
+        )
+        return f"""
+        <section class="section summary-section" id="summary">
+          <div class="conclusion-layout">
+            <div class="conclusion-card">
+              <div><p class="eyebrow">{_e(message("report.summary.eyebrow", language))}</p><h2>{_e(title)}</h2></div>
+              <p>{_e(body)}</p>
+            </div>
+            <aside class="boundary-card"><div><span class="label">{_e(message("report.status", language))}</span><p>{_e(message("report.summary.boundary", language))}</p></div></aside>
+          </div>
+        </section>
+        """
+
+    def _render_coverage(self, data: _ReportData) -> str:
+        view = data.view
+        language = data.language
+        coverage = (
+            (
+                "source",
+                view.assessment.source,
+                message(
+                    "report.coverage.source.detail",
+                    language,
+                    facts=view.source.fact_count,
+                    time=_check_time(view.assessment.source, language),
+                ),
+            ),
+            (
+                "mysql",
+                view.assessment.mysql,
+                message(
+                    "report.coverage.mysql.detail",
+                    language,
+                    facts=view.runtime.verified_fact_count,
+                    time=_check_time(view.assessment.mysql, language),
+                ),
+            ),
+            (
+                "reconciliation",
+                view.assessment.reconciliation,
+                message(
+                    "report.coverage.reconciliation.detail",
+                    language,
+                    time=_check_time(view.assessment.reconciliation, language),
+                ),
+            ),
+        )
+        items = []
+        for domain, check, detail in coverage:
+            key = f"terminal.check.{domain}.{check.state.value}"
+            if domain == "source" and check.state is not CheckState.CURRENT:
+                key = "terminal.check.source.failed"
+            items.append(
+                f'<li class="coverage-item state-{_e(check.state.value)}">'
+                f'<span class="state-label">{_e(message(f"report.state.{check.state.value}", language))}</span>'
+                f'<strong>{_e(message(key, language))}</strong><p>{_e(detail)}</p></li>'
+            )
+        return f"""
+        <section class="section" id="coverage">
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.coverage.eyebrow", language))}</p><h2>{_e(message("report.coverage.title", language))}</h2></div><span class="section-index">02</span></div>
+          <ol class="coverage-list">{"".join(items)}</ol>
+        </section>
+        """
+
+    def _render_attention(self, data: _ReportData) -> str:
+        view = data.view
+        language = data.language
+        rendered_items = "".join(
+            self._render_attention_item(item, language)
+            for item in view.attention_items
+        )
+        if not rendered_items:
+            rendered_items = (
+                f'<li class="empty-state">{_e(message("report.attention.empty", language))}</li>'
+            )
+        action = view.next_action
+        command = (
+            f'<code class="command">{_e(shlex.join(action.command))}</code>'
+            if action.command is not None
+            else ""
+        )
+        return f"""
+        <section class="section" id="attention">
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.attention.eyebrow", language))}</p><h2>{_e(message("report.attention.title", language))}</h2></div><span class="section-index">03</span></div>
+          <div class="attention-layout"><ul class="attention-list">{rendered_items}</ul><aside class="boundary-card"><div><strong>{_e(message("report.next.title", language))}</strong><p>{_e(message(f"report.next.{action.kind.value}", language))}</p>{command}</div></aside></div>
+        </section>
+        """
+
+    @staticmethod
+    def _render_attention_item(item: AttentionItem, language: Language) -> str:
+        detail_codes = tuple(
+            dict.fromkeys(
+                (
+                    *item.error_codes,
+                    *(item.reason_codes if item.state is CheckState.UNKNOWN else ()),
+                )
+            )
+        )
+        details = (
+            f'<details><summary>{_e(message("report.technical_details", language))}</summary><code>{_e(" · ".join(detail_codes))}</code></details>'
+            if detail_codes
+            else ""
+        )
+        return (
+            f'<li class="attention-item kind-{_e(item.kind.value)}">'
+            f'{_e(message(f"report.attention.{item.kind.value}", language, count=item.count or 0))}'
+            f"{details}</li>"
+        )
 
     def _render_overview(self, data: _ReportData) -> str:
         language = data.language
+        view = data.view
         facts = data.static_result.facts
         static_collectors = set(data.static_result.collectors)
-        runtime = data.runtime_result
-        recon = data.reconciliation_result
         git_commit = _fact_value(facts, "HEAD commit")
         branch = _fact_value(facts, "Current branch")
         stats = [
             ("report.static_facts", str(len(facts)), True),
             (
-                "report.runtime_verified_facts",
-                str(sum(fact.status == "verified" for fact in runtime.facts))
-                if runtime is not None
-                else message("report.not_available", language),
-                runtime is not None,
-            ),
-            (
                 "report.spring_endpoints",
-                str(sum(fact.id.startswith("fact.spring.endpoint.") for fact in facts))
+                str(view.source.spring_endpoint_count)
                 if "spring_api" in static_collectors
                 else message("report.not_available", language),
                 "spring_api" in static_collectors,
             ),
             (
                 "report.maven_dependencies",
-                str(sum(_is_direct_maven_dependency(fact) for fact in facts))
+                str(view.source.maven_dependency_count)
                 if "maven_project" in static_collectors
                 else message("report.not_available", language),
                 "maven_project" in static_collectors,
             ),
             (
                 "report.repository_flyway_migrations",
-                str(sum(_is_source_migration(fact) for fact in facts))
+                str(view.source.flyway_migration_count)
                 if "flyway_migration" in static_collectors
                 else message("report.not_available", language),
                 "flyway_migration" in static_collectors,
-            ),
-            (
-                "report.mysql_tables",
-                str(sum(fact.name == "MySQL base table" for fact in runtime.facts))
-                if runtime is not None
-                else message("report.not_available", language),
-                runtime is not None,
-            ),
-            (
-                "report.drift_findings",
-                str(len(recon.findings))
-                if recon is not None
-                else message("report.not_available", language),
-                recon is not None,
             ),
         ]
         stat_cards = "".join(
@@ -370,15 +465,20 @@ class ReportGenerator:
             for label_key, value, available in stats
         )
         content = f"""
-        <section class="overview section" id="overview">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.overview.eyebrow", language))}</p><h2>{_e(message("report.overview.title", language))}</h2></div><span class="section-index">01</span></div>
+        <section class="overview section" id="project">
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.project.eyebrow", language))}</p><h2>{_e(message("report.project.title", language))}</h2></div><span class="section-index">04</span></div>
           <div class="identity-grid">
-            <div><span class="label">{_e(message("report.repository_path", language))}</span><code>{_e(data.root)}</code></div>
-            <div><span class="label">{_e(message("report.display_name", language))}</span><strong>{_e(Path(data.root).name or data.root)}</strong></div>
+            <div><span class="label">{_e(message("report.repository_path", language))}</span><code>{_e(view.repository.path)}</code></div>
+            <div><span class="label">{_e(message("report.display_name", language))}</span><strong>{_e(view.repository.name)}</strong></div>
             <div><span class="label">{_e(message("report.git_commit", language))}</span><code>{_display(git_commit, language)}</code></div>
             <div><span class="label">{_e(message("report.branch", language))}</span><code>{_display(branch, language)}</code></div>
           </div>
           <div class="stat-grid">{stat_cards}</div>
+          <div class="identity-grid">
+            <div><span class="label">{_e(message("report.runtime_verified_facts", language))}</span><strong>{_display(view.runtime.verified_fact_count if view.runtime.successful else None, language)}</strong></div>
+            <div><span class="label">{_e(message("report.mysql_tables", language))}</span><strong>{_display(view.runtime.mysql_table_count if view.runtime.successful else None, language)}</strong></div>
+            <div><span class="label">{_e(message("report.drift_findings", language))}</span><strong>{_display(view.conclusion.drift_count if view.conclusion.drift_detected is not None else None, language)}</strong></div>
+          </div>
         </section>
         """
         return content
@@ -386,7 +486,11 @@ class ReportGenerator:
     def _render_status(self, data: _ReportData) -> str:
         language = data.language
         static_counts = _status_counts(data.static_result.facts)
-        runtime_counts = _status_counts(data.runtime_result.facts) if data.runtime_result else None
+        runtime_counts = (
+            _status_counts(data.runtime_result.facts)
+            if data.runtime_result is not None and data.view.runtime.successful
+            else None
+        )
         rows = []
         for status in ("declared", "inferred", "verified", "conflicted"):
             runtime_value = (
@@ -399,7 +503,7 @@ class ReportGenerator:
             )
         return f"""
         <section class="section" id="evidence-status">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.evidence_status.eyebrow", language))}</p><h2>{_e(message("report.evidence_status.title", language))}</h2></div><span class="section-index">02</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.evidence_status.eyebrow", language))}</p><h2>{_e(message("report.evidence_status.title", language))}</h2></div><span class="section-index">10</span></div>
           <p class="section-note">{_e(message("report.evidence_status.note", language))}</p>
           <div class="table-wrap"><table><thead><tr><th>{_e(message("report.status", language))}</th><th>{_e(message("report.static_scan", language))}</th><th>{_e(message("report.mysql_verification", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
         </section>
@@ -408,13 +512,33 @@ class ReportGenerator:
     def _render_reconciliation(self, data: _ReportData) -> str:
         language = data.language
         recon = data.reconciliation_result
-        if recon is None:
+        reconciliation_state = data.view.assessment.reconciliation.state
+        if reconciliation_state is CheckState.STALE and recon is not None:
+            fact_ids, evidence_ids = _available_reference_ids(data)
+            findings = "".join(
+                self._render_finding(
+                    finding,
+                    language,
+                    fact_ids=fact_ids,
+                    evidence_ids=evidence_ids,
+                )
+                for finding in sorted(recon.findings, key=_finding_sort_key)
+            )
+            summary = recon.summary
+            return f"""
+            <section class="section section-drift" id="reconciliation">
+              <div class="section-heading"><div><p class="eyebrow">{_e(message("report.reconciliation.eyebrow", language))}</p><h2>{_e(message("report.reconciliation.stale.title", language))}</h2></div><span class="section-index">05</span></div>
+              <div class="stale-banner"><strong>{_e(message("terminal.check.reconciliation.stale", language))}</strong><span>{_e(message("report.reconciliation.stale.note", language))}</span></div>
+              <details class="recorded-comparison"><summary>{_e(message("report.reconciliation.recorded_disclosure", language))}</summary><div><p>{_e(message("report.reconciliation.stale.note", language))}</p><p>{_e(message("terminal.reconciliation.counts", language, matched=summary.matched, runtime_only=summary.runtime_only, source_only=summary.source_only))}</p><div class="finding-list">{findings or f'<p class="empty-note">{_e(message("report.no_reconciliation_findings", language))}</p>'}</div></div></details>
+            </section>
+            """
+        if reconciliation_state is not CheckState.CURRENT or recon is None:
             return self._unavailable_section(
                 "reconciliation",
-                "03",
+                "05",
                 message("report.reconciliation.eyebrow", language),
                 message("report.not_available", language),
-                _artifact_note(data.reconciliation, language),
+                message("report.reconciliation.failed.note", language),
                 language=language,
             )
         summary = recon.summary
@@ -444,14 +568,20 @@ class ReportGenerator:
             f'<div class="flyway-compare"><div><span class="label">{_e(message("report.repository_flyway", language))}</span><strong>{_e(_version_range(source_versions) or message("report.not_available", language))}</strong></div>'
             f'<div><span class="label">{_e(message("report.runtime_flyway", language))}</span><strong>{_e(_runtime_version_line(summary.runtime_baseline_version, runtime_versions) or message("report.not_available", language))}</strong></div></div>'
         )
+        fact_ids, evidence_ids = _available_reference_ids(data)
         findings = "".join(
-            self._render_finding(finding, language)
+            self._render_finding(
+                finding,
+                language,
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
+            )
             for finding in sorted(recon.findings, key=_finding_sort_key)
         )
         findings = findings or f'<p class="empty-note">{_e(message("report.no_reconciliation_findings", language))}</p>'
         return f"""
         <section class="section section-drift" id="reconciliation">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.reconciliation.eyebrow", language))}</p><h2>{_e(message("report.reconciliation.title", language))}</h2></div><span class="section-index">03</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.reconciliation.eyebrow", language))}</p><h2>{_e(message("report.reconciliation.title", language))}</h2></div><span class="section-index">05</span></div>
           {drift}
           <div class="mini-stat-grid">{summary_cards}</div>
           {narrative}
@@ -459,7 +589,14 @@ class ReportGenerator:
         </section>
         """
 
-    def _render_finding(self, finding: Any, language: Language) -> str:
+    def _render_finding(
+        self,
+        finding: Any,
+        language: Language,
+        *,
+        fact_ids: set[str],
+        evidence_ids: set[str],
+    ) -> str:
         detail_items = []
         for key in ("source_file", "runtime_script"):
             if key in finding.details:
@@ -468,7 +605,11 @@ class ReportGenerator:
                     f"<dd><code>{_display(finding.details[key], language)}</code></dd>"
                 )
         refs = "".join(
-            f'<li><span>{_e(reference.artifact)} / {_e(reference.reference_type)}</span><code>{_e(reference.id)}</code></li>'
+            self._render_finding_reference(
+                reference,
+                fact_ids=fact_ids,
+                evidence_ids=evidence_ids,
+            )
             for reference in finding.references
         )
         fallback_message = str(finding.message)
@@ -487,12 +628,35 @@ class ReportGenerator:
         </article>
         """
 
+    @staticmethod
+    def _render_finding_reference(
+        reference: Any,
+        *,
+        fact_ids: set[str],
+        evidence_ids: set[str],
+    ) -> str:
+        available = (
+            reference.id in fact_ids
+            if reference.reference_type == "fact"
+            else reference.id in evidence_ids
+        )
+        rendered_id = f"<code>{_e(reference.id)}</code>"
+        if available:
+            rendered_id = (
+                f'<a href="#{_e(_reference_anchor(reference.reference_type, reference.id))}">'
+                f"{rendered_id}</a>"
+            )
+        return (
+            f'<li><span>{_e(reference.artifact)} / '
+            f'{_e(reference.reference_type)}</span>{rendered_id}</li>'
+        )
+
     def _render_spring(self, data: _ReportData) -> str:
         language = data.language
         if "spring_api" not in data.static_result.collectors:
             return self._unavailable_section(
                 "spring",
-                "04",
+                "06",
                 message("report.spring.eyebrow", language),
                 message("report.spring.title", language),
                 message("report.artifact_missing", language),
@@ -513,7 +677,7 @@ class ReportGenerator:
         )
         return f"""
         <section class="section" id="spring-api">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.spring.eyebrow", language))}</p><h2>{_e(message("report.spring.title", language))}</h2></div><span class="section-index">04</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.spring.eyebrow", language))}</p><h2>{_e(message("report.spring.title", language))}</h2></div><span class="section-index">06</span></div>
           <div class="section-toolbar"><p>{_e(message("report.spring.toolbar", language, count=len(facts)))}</p><label>{_e(message("report.filter_endpoints", language))} <input type="search" data-endpoint-filter placeholder="{_e(message("report.filter_placeholder", language))}" aria-label="{_e(message("report.filter_aria", language))}"></label></div>
           <div class="endpoint-list">{endpoints or f'<p class="empty-note">{_e(message("report.no_endpoint_facts", language))}</p>'}</div>
         </section>
@@ -542,7 +706,7 @@ class ReportGenerator:
         <details class="endpoint-row" data-endpoint-row>
           <summary><span class="method method-{_e(str(value.get("method", "")).lower())}">{_e(value.get("method"))}</span><code>{_e(value.get("path"))}</code><span>{_e(value.get("controller"))}</span><span>{_e(value.get("handler"))}</span><span class="status-pill">{_e(status_label(fact.status, language))}</span></summary>
           <div class="detail-grid">
-            <div><span class="label">{_e(message("report.fact_id", language))}</span><code>{_e(fact.id)}</code></div>
+            <div><span class="label">{_e(message("report.fact_id", language))}</span><a href="#{_e(_fact_anchor(fact.id))}"><code>{_e(fact.id)}</code></a></div>
             <div><span class="label">{_e(message("report.source_location", language))}</span><code>{_display(source, language)}{f' · {_e(message("report.line", language, value=line))}' if line is not None else ''}</code></div>
             <div><span class="label">{_e(message("report.evidence_ids", language))}</span><ul class="plain-list">{evidence_rows}</ul></div>
             <div><span class="label">{_e(message("report.annotation_information", language))}</span><ul class="plain-list">{annotations or f'<li>{_e(message("report.not_available", language))}</li>'}</ul></div>
@@ -555,7 +719,7 @@ class ReportGenerator:
         if "maven_project" not in data.static_result.collectors:
             return self._unavailable_section(
                 "maven",
-                "05",
+                "07",
                 message("report.maven.eyebrow", language),
                 message("report.maven.title", language),
                 message("report.artifact_missing", language),
@@ -577,7 +741,7 @@ class ReportGenerator:
         )
         return f"""
         <section class="section" id="maven">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.maven.eyebrow", language))}</p><h2>{_e(message("report.maven.title", language))}</h2></div><span class="section-index">05</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.maven.eyebrow", language))}</p><h2>{_e(message("report.maven.title", language))}</h2></div><span class="section-index">07</span></div>
           <p class="section-note">{_e(message("report.maven.note", language))}</p>
           {groups_html}
         </section>
@@ -593,7 +757,7 @@ class ReportGenerator:
             subject = value.get("artifact_id") or value.get("source") or value.get("declared_field") or fact.name
             detail = value.get("resolved_value") or value.get("declared_value") or value.get("resolved_version") or value.get("declared_version") or value.get("module") or "—"
             rows.append(
-                f'<tr><td><strong>{_e(subject)}</strong><br><code>{_e(fact.id)}</code></td><td>{_display(detail, language)}</td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
+                f'<tr><td><strong>{_e(subject)}</strong><br><a href="#{_e(_fact_anchor(fact.id))}"><code>{_e(fact.id)}</code></a></td><td>{_display(detail, language)}</td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
             )
         return f'<div class="table-wrap"><table><thead><tr><th>{_e(message("report.declaration", language))}</th><th>{_e(message("report.value", language))}</th><th>{_e(message("report.status", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
 
@@ -602,7 +766,7 @@ class ReportGenerator:
         if "flyway_migration" not in data.static_result.collectors:
             return self._unavailable_section(
                 "flyway",
-                "06",
+                "08",
                 message("report.flyway.eyebrow", language),
                 message("report.flyway.title", language),
                 message("report.artifact_missing", language),
@@ -616,7 +780,7 @@ class ReportGenerator:
         for fact in migration_facts:
             value = fact.value if isinstance(fact.value, dict) else {}
             rows.append(
-                f'<tr><td><code>{_display(value.get("version"), language)}</code></td><td>{_e(value.get("type"))}</td><td>{_e(value.get("source_file"))}</td><td><code>{_e(value.get("file_sha256"))}</code></td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
+                f'<tr><td><code>{_display(value.get("version"), language)}</code></td><td>{_e(value.get("type"))}</td><td><a href="#{_e(_fact_anchor(fact.id))}">{_e(value.get("source_file"))}</a></td><td><code>{_e(value.get("file_sha256"))}</code></td><td><span class="status-pill">{_e(status_label(fact.status, language))}</span></td></tr>'
             )
         set_facts = sorted(
             (fact for fact in data.static_result.facts if fact.name == "Flyway migration set summary"),
@@ -628,7 +792,7 @@ class ReportGenerator:
         )
         return f"""
         <section class="section" id="flyway">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.flyway.eyebrow", language))}</p><h2>{_e(message("report.flyway.title", language))}</h2></div><span class="section-index">06</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.flyway.eyebrow", language))}</p><h2>{_e(message("report.flyway.title", language))}</h2></div><span class="section-index">08</span></div>
           <p class="section-note">{_e(message("report.flyway.note", language))}</p>
           <div class="table-wrap"><table><thead><tr><th>{_e(message("report.version", language))}</th><th>{_e(message("report.type", language))}</th><th>{_e(message("report.source_filename", language))}</th><th>{_e(message("report.file_sha256", language))}</th><th>{_e(message("report.status", language))}</th></tr></thead><tbody>{"".join(rows) or f'<tr><td colspan="5">{_e(message("report.no_migrations", language))}</td></tr>'}</tbody></table></div>
           <div class="subheading"><h3>{_e(message("report.migration_sets", language))}</h3><span>{len(set_facts)}</span></div>
@@ -639,13 +803,23 @@ class ReportGenerator:
     def _render_mysql(self, data: _ReportData) -> str:
         language = data.language
         runtime = data.runtime_result
-        if runtime is None:
+        if (
+            runtime is None
+            or data.view.assessment.mysql.state is not CheckState.CURRENT
+        ):
+            state = data.view.assessment.mysql.state
+            note_key = {
+                CheckState.NOT_RUN: "report.attention.database_not_verified",
+                CheckState.FAILED: "report.attention.database_verification_failed",
+                CheckState.STALE: "report.attention.state_unknown",
+                CheckState.UNKNOWN: "report.attention.state_unknown",
+            }.get(state, "report.not_available")
             return self._unavailable_section(
                 "mysql",
-                "07",
+                "09",
                 message("report.mysql.eyebrow", language),
                 message("report.not_available", language),
-                _artifact_note(data.runtime, language),
+                message(note_key, language),
                 language=language,
             )
         facts = runtime.facts
@@ -676,7 +850,7 @@ class ReportGenerator:
         )
         return f"""
         <section class="section" id="mysql-runtime">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.mysql.eyebrow", language))}</p><h2>{_e(message("report.mysql.title", language))}</h2></div><span class="section-index">07</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.mysql.eyebrow", language))}</p><h2>{_e(message("report.mysql.title", language))}</h2></div><span class="section-index">09</span></div>
           <div class="runtime-banner"><strong>{_e(message("report.verified_runtime", language))}</strong><span>{_e(message("report.observed", language, value=_display(runtime.metadata.observed_at or runtime.metadata.finished_at, language)))}</span></div>
           <div class="identity-grid"><div><span class="label">{_e(message("report.server_version", language))}</span><strong>{_display(server, language)}</strong></div><div><span class="label">{_e(message("report.selected_database", language))}</span><strong>{_display(database, language)}</strong></div></div>
           <div class="mini-stat-grid">{count_html}</div>
@@ -698,11 +872,17 @@ class ReportGenerator:
             self._render_fact_ledger(artifact, fact, evidence_by_id, language)
             for artifact, fact in facts
         )
+        evidence_blocks = "".join(
+            self._render_evidence_ledger(evidence, language)
+            for evidence in sorted(evidence_by_id.values(), key=lambda item: item.id)
+        )
         return f"""
         <section class="section" id="ledger">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.ledger.eyebrow", language))}</p><h2>{_e(message("report.ledger.title", language))}</h2></div><span class="section-index">08</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.ledger.eyebrow", language))}</p><h2>{_e(message("report.ledger.title", language))}</h2></div><span class="section-index">11</span></div>
           <p class="section-note">{_e(message("report.ledger.note", language))}</p>
           <div class="ledger">{blocks or f'<p class="empty-note">{_e(message("report.no_facts", language))}</p>'}</div>
+          <div class="subheading"><h3>{_e(message("report.evidence_records", language))}</h3><span>{len(evidence_by_id)}</span></div>
+          <div class="ledger">{evidence_blocks}</div>
         </section>
         """
 
@@ -722,12 +902,21 @@ class ReportGenerator:
                 )
                 continue
             evidence_blocks.append(
-                f'<li><details><summary><code>{_e(evidence.id)}</code> <span>{_e(evidence.kind)}</span></summary><div class="evidence-detail"><p><span class="label">{_e(message("report.source", language))}</span> {_e(evidence.source)}</p>{_json_block(evidence.value)}</div></details></li>'
+                f'<li><a href="#{_e(_evidence_anchor(evidence.id))}"><code>{_e(evidence.id)}</code></a><span>{_e(evidence.kind)} · {_e(evidence.source)}</span></li>'
             )
         return f"""
-        <details class="fact-row">
+        <details class="fact-row" id="{_e(_fact_anchor(fact.id))}">
           <summary><span class="status-dot status-{_e(fact.status)}"></span><span class="status-pill">{_e(status_label(fact.status, language))}</span><code>{_e(fact.id)}</code><span>{_e(fact.name)}</span><em>{_e(artifact)}</em></summary>
           <div class="fact-detail"><div class="detail-grid"><div><span class="label">{_e(message("report.fact_id", language))}</span><code>{_e(fact.id)}</code></div><div><span class="label">{_e(message("report.status", language))}</span><span class="status-pill">{_e(status_label(fact.status, language))}</span></div><div><span class="label">{_e(message("report.structured_value", language))}</span>{_json_block(fact.value)}</div><div><span class="label">{_e(message("report.evidence_ids", language))}</span><ul class="plain-list">{"".join(evidence_blocks) or f'<li>{_e(message("report.not_available", language))}</li>'}</ul></div></div></div>
+        </details>
+        """
+
+    @staticmethod
+    def _render_evidence_ledger(evidence: Evidence, language: Language) -> str:
+        return f"""
+        <details class="fact-row evidence-row" id="{_e(_evidence_anchor(evidence.id))}">
+          <summary><span class="status-dot"></span><span class="status-pill">Evidence</span><code>{_e(evidence.id)}</code><span>{_e(evidence.kind)}</span><em>{_e(evidence.source)}</em></summary>
+          <div class="fact-detail"><div class="detail-grid"><div><span class="label">{_e(message("report.source", language))}</span><code>{_e(evidence.source)}</code></div><div><span class="label">{_e(message("report.structured_value", language))}</span>{_json_block(evidence.value)}</div></div></div>
         </details>
         """
 
@@ -742,7 +931,7 @@ class ReportGenerator:
                     for label, value in artifact.time_labels
                 ) or _e(message("report.not_available", language))
                 rows.append(
-                    f'<tr><td><code>{_e(artifact.relative_path)}</code></td><td>{_e(artifact.artifact)}</td><td><code>{_e(artifact.schema_version)}</code></td><td><code>{_e(artifact.sha256)}</code></td><td>{times}</td></tr>'
+                    f'<tr><td><a href="{_e(_artifact_href(artifact.artifact))}"><code>{_e(artifact.relative_path)}</code></a></td><td>{_e(artifact.artifact)}</td><td><code>{_e(artifact.schema_version)}</code></td><td><code>{_e(artifact.sha256)}</code></td><td>{times}</td></tr>'
                 )
             else:
                 rows.append(
@@ -750,7 +939,7 @@ class ReportGenerator:
                 )
         return f"""
         <section class="section" id="provenance">
-          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.provenance.eyebrow", language))}</p><h2>{_e(message("report.provenance.title", language))}</h2></div><span class="section-index">09</span></div>
+          <div class="section-heading"><div><p class="eyebrow">{_e(message("report.provenance.eyebrow", language))}</p><h2>{_e(message("report.provenance.title", language))}</h2></div><span class="section-index">12</span></div>
           <p class="section-note">{_e(message("report.provenance.note", language))}</p>
           <div class="table-wrap"><table><thead><tr><th>{_e(message("report.path", language))}</th><th>{_e(message("report.artifact", language))}</th><th>{_e(message("report.schema", language))}</th><th>{_e(message("report.sha256", language))}</th><th>{_e(message("report.snapshot_time", language))}</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>
         </section>
@@ -796,6 +985,45 @@ def _artifact_note(artifact: _Artifact, language: Language) -> str:
     if artifact.error_key is not None:
         return message(artifact.error_key, language)
     return artifact.error or message("report.not_available", language)
+
+
+def _check_time(check: CheckAssessment, language: Language) -> str:
+    if check.timestamp is None:
+        return message("report.coverage.no_time", language)
+    return check.timestamp.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _fact_anchor(fact_id: str) -> str:
+    return f"fact-{fact_id}"
+
+
+def _evidence_anchor(evidence_id: str) -> str:
+    return f"evidence-{evidence_id}"
+
+
+def _reference_anchor(reference_type: str, reference_id: str) -> str:
+    return (
+        _fact_anchor(reference_id)
+        if reference_type == "fact"
+        else _evidence_anchor(reference_id)
+    )
+
+
+def _available_reference_ids(data: _ReportData) -> tuple[set[str], set[str]]:
+    facts = set(fact.id for fact in data.static_result.facts)
+    evidence = set(item.id for item in data.static_result.evidence)
+    if data.runtime_result is not None:
+        facts.update(fact.id for fact in data.runtime_result.facts)
+        evidence.update(item.id for item in data.runtime_result.evidence)
+    return facts, evidence
+
+
+def _artifact_href(artifact: str) -> str:
+    return {
+        "static_scan": "../evidence.json",
+        "mysql_verification": "../verification/mysql.json",
+        "reconciliation": "../reconciliation.json",
+    }[artifact]
 
 
 def _e(value: object) -> str:
@@ -926,24 +1154,3 @@ def _runtime_version_line(baseline: str | None, versions: list[str]) -> str:
 
 def _finding_sort_key(finding: Any) -> tuple[tuple[int, ...], str]:
     return tuple(finding.version_key), finding.id
-
-
-_CSS = r"""
-:root{--ink:#0b1f33;--ink-2:#173b52;--paper:#f6f3ec;--surface:#fffdf8;--rule:#d8dedc;--muted:#607078;--teal:#087f73;--teal-soft:#d9f0ea;--amber:#a65413;--amber-soft:#fff0dd;--red:#a52b32;--blue:#236b91;--shadow:0 12px 34px rgba(11,31,51,.08)}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:16px;line-height:1.55}code,pre,input,.eyebrow,.section-index,.status-pill,.method{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}code{overflow-wrap:anywhere}h1,h2,h3,p{margin-top:0}h1{max-width:720px;margin-bottom:20px;font-size:clamp(2.6rem,6vw,5.4rem);line-height:.98;letter-spacing:-.065em;font-weight:720}h2{font-size:clamp(1.55rem,2.6vw,2.45rem);line-height:1.08;letter-spacing:-.04em;margin-bottom:0}h3{font-size:1.03rem;margin-bottom:0}.hero{background:var(--ink);color:#f3f7f4;padding:clamp(34px,6vw,84px) max(24px,calc((100vw - 1180px)/2));position:relative;overflow:hidden}.hero:after{content:"";position:absolute;width:520px;height:520px;border:1px solid rgba(95,212,188,.22);border-radius:50%;right:-140px;top:-270px;box-shadow:0 0 0 34px rgba(95,212,188,.03),0 0 0 68px rgba(95,212,188,.02)}.hero-grid{max-width:1180px;margin:auto;display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:48px;align-items:end;position:relative;z-index:1}.eyebrow{font-size:.72rem;letter-spacing:.15em;font-weight:700;color:var(--teal);margin-bottom:12px}.hero .eyebrow{color:#73d4bf}.hero-copy{max-width:660px;color:#c4d1d3;font-size:1.08rem}.hero-stamp{border-left:1px solid #385262;padding-left:20px;display:grid;gap:5px;color:#a9c0c3}.hero-stamp strong{color:#fff;font:600 .78rem/1.4 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.hero-stamp small{font-size:.78rem}.skip-link{position:absolute;left:-999px;top:8px;background:#fff;color:var(--ink);padding:10px 14px;z-index:10}.skip-link:focus{left:8px}.shell{max-width:1180px;margin:auto;padding:0 24px}.section{padding:72px 0;border-bottom:1px solid var(--rule)}.section-heading{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;margin-bottom:24px}.section-index{color:#93a3a4;font-size:.8rem;letter-spacing:.1em}.section-note{color:var(--muted);max-width:760px}.identity-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:1px;background:var(--rule);border:1px solid var(--rule);box-shadow:var(--shadow);margin:28px 0}.identity-grid>div{background:var(--surface);padding:18px;min-width:0}.label{display:block;text-transform:uppercase;letter-spacing:.09em;font:700 .67rem/1.3 ui-monospace,SFMono-Regular,monospace;color:var(--muted);margin-bottom:7px}.identity-grid code,.identity-grid strong{display:block;overflow-wrap:anywhere}.stat-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px}.stat-card{background:var(--surface);border:1px solid var(--rule);padding:18px 15px;min-height:118px;display:flex;flex-direction:column;justify-content:space-between}.stat-card span,.mini-stat span{font:700 .68rem/1.3 ui-monospace,SFMono-Regular,monospace;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}.stat-card strong{font-size:1.85rem;line-height:1;color:var(--ink);font-variant-numeric:tabular-nums}.stat-card.unavailable strong,.unavailable{color:#8d9797;font-size:1rem}.table-wrap{overflow-x:auto;border:1px solid var(--rule);background:var(--surface);margin:18px 0;box-shadow:0 5px 20px rgba(11,31,51,.04)}table{border-collapse:collapse;width:100%;min-width:620px}th,td{text-align:left;vertical-align:top;padding:13px 15px;border-bottom:1px solid #e6e9e5}th{font:700 .68rem/1.3 ui-monospace,SFMono-Regular,monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);background:#f2f2eb}tr:last-child td{border-bottom:0}.mini-stat-grid{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:8px;margin:22px 0}.mini-stat{background:rgba(255,253,248,.72);border:1px solid var(--rule);padding:13px;min-height:72px}.mini-stat strong{display:block;margin-top:8px;font-size:1.2rem;line-height:1.05;font-variant-numeric:tabular-nums}.drift-banner,.match-banner,.runtime-banner{display:flex;align-items:center;gap:12px;padding:15px 18px;margin:22px 0;border:1px solid}.drift-banner{background:var(--amber-soft);border-color:#e1b98f;color:#6f330f}.match-banner{background:var(--teal-soft);border-color:#a6d8cc;color:#065b52}.runtime-banner{background:#e6f0f5;border-color:#b9d2df;color:#165375}.drift-banner span:last-child,.match-banner span:last-child,.runtime-banner span{color:var(--muted)}.drift-dot,.match-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}.drift-dot{background:var(--amber)}.match-dot{background:var(--teal)}.flyway-compare{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:22px 0}.flyway-compare>div{background:var(--ink);color:#f4f8f2;padding:20px}.flyway-compare .label{color:#8fb4b4}.finding-list{margin-top:30px}.subheading{display:flex;justify-content:space-between;align-items:baseline;gap:16px;margin:30px 0 12px}.subheading span{font:700 .7rem ui-monospace,monospace;color:var(--muted)}.finding{background:var(--surface);border:1px solid var(--rule);padding:18px 20px;margin:10px 0}.finding-runtime_only,.finding-version_mismatch,.finding-runtime_failed,.finding-ambiguous{border-left:4px solid var(--amber)}.finding-source_only{border-left:4px solid var(--blue)}.finding-matched{border-left:4px solid var(--teal)}.finding-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.finding-top>strong{font-size:1.2rem}.finding-top>code{margin-left:auto;color:var(--muted);font-size:.72rem}.status-pill{display:inline-flex;align-items:center;border:1px solid #bdcbc6;padding:3px 7px;font-size:.67rem;line-height:1.2;letter-spacing:.02em;color:#315650;background:#eef5f1}.status-conflicted,.finding-runtime_failed .status-pill,.finding-ambiguous .status-pill{color:var(--red);background:#fff0f0;border-color:#e4b4b7}.status-verified{color:var(--teal)}.status-declared{color:#76551c}.status-inferred{color:#236b91}.compact-dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px 14px;margin:12px 0}.compact-dl dt{color:var(--muted);text-transform:capitalize}.compact-dl dd{margin:0}.reference-block{border-top:1px solid var(--rule);padding-top:12px;margin-top:14px}.reference-block ul{list-style:none;padding:0;margin:8px 0 0;display:grid;gap:6px}.reference-block li{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.reference-block li span{font-size:.78rem;color:var(--muted)}.section-toolbar{display:flex;justify-content:space-between;gap:20px;align-items:end;color:var(--muted);margin-bottom:15px}.section-toolbar p{margin:0;max-width:650px}.section-toolbar label{font:700 .7rem ui-monospace,monospace;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:grid;gap:7px;min-width:250px}.section-toolbar input{font:400 .9rem system-ui,sans-serif;padding:10px 12px;border:1px solid #aebdba;background:var(--surface);color:var(--ink);min-height:44px}.section-toolbar input:focus{outline:3px solid rgba(8,127,115,.3);outline-offset:2px}.endpoint-list{display:grid;gap:8px}.endpoint-row,.fact-row{background:var(--surface);border:1px solid var(--rule);box-shadow:0 4px 14px rgba(11,31,51,.03)}.endpoint-row[open],.fact-row[open]{border-color:#8bbeb4}.endpoint-row summary,.fact-row summary{cursor:pointer;list-style:none;min-height:50px;padding:12px 15px;display:grid;grid-template-columns:80px minmax(150px,2fr) 1fr 1fr 100px;gap:12px;align-items:center}.endpoint-row summary::-webkit-details-marker,.fact-row summary::-webkit-details-marker{display:none}.endpoint-row summary:before,.fact-row summary:before{content:"+";color:var(--teal);font:700 1.1rem ui-monospace,monospace}.endpoint-row[open] summary:before,.fact-row[open] summary:before{content:"−"}.endpoint-row summary code{overflow-wrap:anywhere}.method{font-size:.72rem;font-weight:700;color:#fff;padding:4px 7px;background:var(--ink-2);width:max-content}.method-get{background:var(--teal)}.method-post{background:#236b91}.method-put{background:#7759a7}.method-delete{background:var(--red)}.method-patch{background:#a65413}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;border-top:1px solid var(--rule);padding:20px}.detail-grid>div{min-width:0}.plain-list{padding:0;margin:0;list-style:none;display:grid;gap:7px}.plain-list li{display:flex;gap:10px;flex-wrap:wrap;align-items:baseline}.evidence-detail{padding:12px 14px;border-top:1px solid var(--rule)}.code-block{white-space:pre-wrap;word-break:break-word;background:#edf0eb;padding:14px;border:1px solid #dce3dc;margin:8px 0;max-height:340px;overflow:auto;font:400 .76rem/1.55 ui-monospace,monospace;color:#1b3544}.maven-group{margin-top:26px}.empty-note,.empty-state{color:var(--muted)}.empty-state{border:1px dashed #bbc7c3;background:rgba(255,253,248,.5);padding:24px;display:grid;gap:5px}.tag-list{display:flex;flex-wrap:wrap;gap:8px;margin:15px 0}.tag{border:1px solid #b9cbc5;background:var(--teal-soft);padding:7px 10px}.ledger{display:grid;gap:8px}.fact-row summary{grid-template-columns:12px 95px minmax(200px,2fr) minmax(180px,2fr) 150px}.fact-row summary em{font:400 .72rem ui-monospace,monospace;color:var(--muted);font-style:normal;text-align:right}.status-dot{width:8px;height:8px;border-radius:50%;display:block}.status-declared{background:#b17818}.status-inferred{background:#236b91}.status-verified{background:var(--teal)}.status-conflicted{background:var(--red)}.fact-detail{border-top:1px solid var(--rule);padding:20px}.footer{max-width:1180px;margin:auto;padding:28px 24px 64px;color:var(--muted);font-size:.82rem}.endpoint-row:focus-within,.fact-row:focus-within,summary:focus-visible{outline:3px solid rgba(8,127,115,.28);outline-offset:2px}@media(max-width:1050px){.stat-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.mini-stat-grid{grid-template-columns:repeat(5,minmax(0,1fr))}.identity-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:720px){body{font-size:16px}.hero-grid{grid-template-columns:1fr;gap:28px}.hero-stamp{border-left:0;border-top:1px solid #385262;padding:15px 0 0}.section{padding:48px 0}.stat-grid,.mini-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.identity-grid,.flyway-compare,.detail-grid{grid-template-columns:1fr}.section-toolbar{display:grid;align-items:stretch}.section-toolbar label{min-width:0}.endpoint-row summary,.fact-row summary{grid-template-columns:32px 1fr 1fr;gap:8px}.endpoint-row summary .method{grid-column:2}.endpoint-row summary code{grid-column:2 / -1}.endpoint-row summary span:nth-of-type(2),.endpoint-row summary span:nth-of-type(3){grid-column:2}.endpoint-row summary .status-pill{grid-column:3;grid-row:3}.fact-row summary{grid-template-columns:12px 90px 1fr}.fact-row summary code{grid-column:3}.fact-row summary span:last-of-type{grid-column:3}.fact-row summary em{grid-column:3;text-align:left}.shell{padding:0 16px}.footer{padding-left:16px;padding-right:16px}}
-@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.endpoint-row,.fact-row{transition:none}}
-"""
-
-_JS = r"""
-(() => {
-  const input = document.querySelector('[data-endpoint-filter]');
-  if (!input) return;
-  const rows = Array.from(document.querySelectorAll('[data-endpoint-row]'));
-  input.addEventListener('input', () => {
-    const query = input.value.trim().toLowerCase();
-    rows.forEach((row) => {
-      row.hidden = query !== '' && !row.textContent.toLowerCase().includes(query);
-    });
-  });
-})();
-"""

@@ -1,5 +1,6 @@
 include README.md
 include README.pypi.md
+include README.zh-CN.md
 prune .github
 prune .repoevidence
 prune .venv
