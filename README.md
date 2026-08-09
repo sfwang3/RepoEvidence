@@ -1,6 +1,12 @@
 # RepoEvidence
 
+English | [简体中文](README.zh-CN.md)
+
+## Why RepoEvidence
+
 RepoEvidence is a deterministic, LLM-free engine for understanding software repositories with evidence you can inspect and verify.
+
+## Core Evidence / Fact model
 
 It separates what a repository declares from what runtime verification observes:
 
@@ -11,7 +17,7 @@ repository → collectors → Evidence / Fact → JSON
 
 Evidence preserves the original observation. A Fact is a structured interpretation with an explicit status: `declared`, `inferred`, `verified`, or `conflicted`. Runtime verification is opt-in, and reconciliation reports cross-artifact drift without pretending that static source evidence and runtime observations are the same thing.
 
-## Quick start
+## Quick Start
 
 Requires Python 3.12 or newer.
 
@@ -34,7 +40,7 @@ repoevidence scan /path/to/repository
 
 The default static collectors inspect repository metadata, Spring MVC annotations, Maven declarations, and Flyway migration files. The scan does not run Maven, Flyway, SQL, tests, or target-repository code.
 
-### Offline HTML report
+### Offline HTML Report
 
 ```bash
 repoevidence report /path/to/repository
@@ -68,17 +74,19 @@ repoevidence reconcile /path/to/repository
 
 Reconciliation reads `.repoevidence/evidence.json` and `.repoevidence/verification/mysql.json` only. It does not connect to MySQL or execute repository code. The result is `.repoevidence/reconciliation.json` and currently covers Flyway `matched`, `runtime_only`, `source_only`, `version_mismatch`, `runtime_failed`, `ambiguous`, and baseline handling.
 
-## ChargeSafe example
+## ChargeSafe drift example
 
 ChargeSafe was used as a real acceptance case, but it is not required to use RepoEvidence and is not bundled with the package. The evidence showed a repository/runtime Flyway drift:
 
 ```text
-Repository: V1–V6
-Runtime:    Baseline 0 + V1–V9
-Result:     runtime-only V7 / V8 / V9
+Repository Flyway: V1-V6
+Runtime:           Baseline 0 + V1-V9
+matched:           6
+runtime-only:      V7/V8/V9
+drift_detected:    true
 ```
 
-The generated reconciliation kept the runtime references for V7, V8, and V9 and did not invent source references. No database credentials or connection configuration are part of this example.
+The generated reconciliation kept the runtime references for V7, V8, and V9, did not invent source references, and renders the outcome as `DRIFT DETECTED` in the HTML report. No database credentials or connection configuration are part of this example.
 
 ## Current coverage
 
@@ -117,6 +125,6 @@ python -m twine check dist/*
 
 The package declares Python `>=3.12`. CI runs the test suite, linter, distribution build, and distribution metadata checks without requiring a live database.
 
-## License
+## Apache-2.0 License
 
 RepoEvidence is licensed under the Apache License 2.0.

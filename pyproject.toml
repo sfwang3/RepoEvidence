@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "repoevidence"
 version = "0.1.0"
 description = "Evidence-backed software understanding and verification for repositories."
-readme = "README.md"
+readme = "README.pypi.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -36,6 +36,7 @@ dependencies = [
 Homepage = "https://github.com/sfwang3/RepoEvidence"
 Repository = "https://github.com/sfwang3/RepoEvidence"
 Issues = "https://github.com/sfwang3/RepoEvidence/issues"
+"简体中文文档" = "https://github.com/sfwang3/RepoEvidence/blob/main/README.zh-CN.md"
 
 [project.optional-dependencies]
 dev = [

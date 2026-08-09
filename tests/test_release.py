@@ -23,7 +23,7 @@ def test_project_metadata_is_ready_for_public_package() -> None:
     assert project["version"] == "0.1.0"
     assert project["version"] == __version__ == importlib.metadata.version("repoevidence")
     assert project["description"]
-    assert project["readme"] == "README.md"
+    assert project["readme"] == "README.pypi.md"
     assert project["requires-python"] == ">=3.12"
     assert project["license"] == "Apache-2.0"
     assert project["license-files"] == ["LICENSE"]
