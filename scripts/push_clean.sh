@@ -6,10 +6,11 @@ set -e
 DEFAULT_MSG="update: sync latest code changes"
 PUSH_MSG="${1:-$DEFAULT_MSG}"
 
-echo "🔍 Checking for code changes to push to GitHub origin/main..."
+echo "🔍 Fetching remote status from GitHub..."
+git fetch origin main >/dev/null 2>&1 || true
 
 # Check if there are code changes compared to origin/main excluding docs/superpowers/
-NON_AI_DIFF=$(git diff origin/main HEAD -- . ':!docs/superpowers')
+NON_AI_DIFF=$(git diff origin/main..HEAD -- . ':!docs/superpowers')
 
 if [ -z "$NON_AI_DIFF" ]; then
     echo "ℹ️  GitHub origin/main is already up to date with all non-AI code changes."
@@ -36,6 +37,9 @@ CLEAN_COMMIT=$(git commit-tree "$TREE_ID" -p "$PARENT_ID" -m "$PUSH_MSG")
 # Push the clean commit to origin/main using --no-verify to bypass pre-push guard
 git push --no-verify origin "$CLEAN_COMMIT:refs/heads/main"
 
+# Fetch updated origin/main tracking ref
+git fetch origin main >/dev/null 2>&1 || true
+
 # Clean up temp index
 rm -f "$TMP_INDEX"
 unset GIT_INDEX_FILE
@@ -46,3 +50,4 @@ echo "   Remote Commit: $CLEAN_COMMIT"
 echo "   Message:       $PUSH_MSG"
 echo "   Note:          docs/superpowers/ was excluded from GitHub."
 echo "========================================================================="
+
